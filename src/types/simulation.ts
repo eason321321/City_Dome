@@ -15,7 +15,9 @@ export enum SimulationSpeed {
  */
 export interface WorldTime {
   totalTicks: number;                    // 累計邏輯 Tick 數 (例如 20 Ticks = 1 秒)
-  day: number;                           // 城市建立以來的第幾天
+  year: number;                          // 當前西元年份 (例如 2027)
+  month: number;                         // 當前月份 (1 ~ 12)
+  day: number;                           // 當前日期 (1 ~ 31)
   hour: number;                          // 當前小時 (0 ~ 23)
   minute: number;                        // 當前分鐘 (0 ~ 59)
 }
