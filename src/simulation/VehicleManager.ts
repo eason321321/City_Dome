@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { VehicleModelFactory } from '../rendering/VehicleModelFactory';
 import { RoadNetwork } from '../systems/RoadNetwork';
-import { PathResult } from '../systems/Pathfinding';
+import { Pathfinding, PathResult } from '../systems/Pathfinding';
 
 export interface ActiveVehicle {
   id: string;
@@ -15,6 +15,8 @@ export interface ActiveVehicle {
   deceleration: number;      // 煞車減速度 (m/s^2)
   state: 'Cruising' | 'WaitingLight' | 'Arrived';
   arrivedTimer?: number;
+  disappearImmediately?: boolean; // 抵達終點後是否立即消失（市民到家）
+  onArrived?: () => void;         // 抵達終點之業務回調 (例如房屋入住人數生效)
 }
 
 /**
@@ -30,6 +32,10 @@ export class VehicleManager {
   private roadNetwork: RoadNetwork;
   private vehicles: ActiveVehicle[] = [];
   private nextVehicleId: number = 1;
+
+  // 外部公路過境車流定時器 (平常路過的車輛：左邊出來右邊出去，反之)
+  private ambientTrafficTimer: number = 0;
+  private readonly AMBIENT_SPAWN_INTERVAL: number = 3.5;
 
   constructor(scene: THREE.Scene, roadNetwork: RoadNetwork) {
     this.scene = scene;
@@ -74,15 +80,124 @@ export class VehicleManager {
   }
 
   /**
+   * 生成一輛自外部城市遷入住宅的市民車輛
+   * 行駛至家門前自動消失，並呼叫入住回調
+   */
+  public spawnMovingInVehicle(
+    route: PathResult,
+    colorHex?: number,
+    onArrived?: () => void
+  ): ActiveVehicle | null {
+    const rwps = route.routeWaypoints;
+    if (!route || !rwps || rwps.length < 2) {
+      console.warn('⚠️ 無法生成市民遷入車輛：路徑無效');
+      return null;
+    }
+
+    const startPos = rwps[0].position.clone();
+    const nextPos = rwps[1].position.clone();
+    const initDir = new THREE.Vector3().subVectors(nextPos, startPos).normalize();
+    const initRotY = Math.atan2(initDir.x, initDir.z);
+
+    const mesh = VehicleModelFactory.createVehicle(colorHex ?? 0x2563eb);
+    mesh.position.copy(startPos);
+    mesh.rotation.y = initRotY;
+    this.scene.add(mesh);
+
+    const vehicle: ActiveVehicle = {
+      id: `citizen_car_${this.nextVehicleId++}`,
+      mesh,
+      route,
+      currentWaypointIndex: 1,
+      currentPosition: startPos,
+      speed: 0,
+      targetSpeed: 9.0, // 舒適巡航速
+      acceleration: 5.0,
+      deceleration: 7.5,
+      state: 'Cruising',
+      disappearImmediately: true,
+      onArrived,
+    };
+
+    this.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  /**
+   * 生成橫貫外部公路之過境車輛 (平常會有路過的車在這邊開：左邊出來右邊出去，反之)
+   */
+  private spawnAmbientHighwayVehicle(): void {
+    const isWestToEast = Math.random() < 0.5;
+    const startLane = isWestToEast
+      ? this.roadNetwork.getHighwayWestEntryLane()
+      : this.roadNetwork.getHighwayEastEntryLane();
+    const goalLane = isWestToEast
+      ? this.roadNetwork.getHighwayEastExitLane()
+      : this.roadNetwork.getHighwayWestExitLane();
+
+    if (!startLane || !goalLane) return;
+
+    const path = Pathfinding.findShortestPath(startLane.id, goalLane.id, this.roadNetwork.getAllLanes());
+    if (!path || !path.routeWaypoints || path.routeWaypoints.length < 2) return;
+
+    // 隨機自用車顏色 (紅白黑藍銀灰金)
+    const colors = [0xdc2626, 0xffffff, 0x1e293b, 0x2563eb, 0x94a3b8, 0xeab308];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+
+    const startPos = path.routeWaypoints[0].position.clone();
+    const nextPos = path.routeWaypoints[1].position.clone();
+    const initDir = new THREE.Vector3().subVectors(nextPos, startPos).normalize();
+    const initRotY = Math.atan2(initDir.x, initDir.z);
+
+    const mesh = VehicleModelFactory.createVehicle(color);
+    mesh.position.copy(startPos);
+    mesh.rotation.y = initRotY;
+    this.scene.add(mesh);
+
+    const vehicle: ActiveVehicle = {
+      id: `highway_through_${this.nextVehicleId++}`,
+      mesh,
+      route: path,
+      currentWaypointIndex: 1,
+      currentPosition: startPos,
+      speed: 10.0 + Math.random() * 2.5, // 公路巡航速度 10~12.5 m/s
+      targetSpeed: 11.5 + Math.random() * 2.5,
+      acceleration: 5.5,
+      deceleration: 7.5,
+      state: 'Cruising',
+      disappearImmediately: true, // 到達另一端邊界後立即駛離銷毀
+    };
+
+    this.vehicles.push(vehicle);
+  }
+
+  /**
    * 每幀更新所有車輛位置、航向與號誌檢查
    */
   public update(deltaTime: number, isPaused: boolean = false): void {
     if (isPaused || deltaTime <= 0) return;
 
+    // 1. 定時生成邊境過境公路行駛車流 (平常路過之車流)
+    this.ambientTrafficTimer += deltaTime;
+    if (this.ambientTrafficTimer >= this.AMBIENT_SPAWN_INTERVAL) {
+      this.ambientTrafficTimer = 0;
+      this.spawnAmbientHighwayVehicle();
+    }
+
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i];
 
       if (v.state === 'Arrived') {
+        if (v.disappearImmediately) {
+          if (v.onArrived) {
+            v.onArrived();
+            v.onArrived = undefined;
+          }
+          this.scene.remove(v.mesh);
+          this.vehicles.splice(i, 1);
+          continue;
+        }
+
         // 抵達後停留數秒後自動淡出銷毀
         v.arrivedTimer = (v.arrivedTimer ?? 0) + deltaTime;
         if (v.arrivedTimer > 5.0) {
@@ -96,6 +211,14 @@ export class VehicleManager {
       if (v.currentWaypointIndex >= rwps.length) {
         v.state = 'Arrived';
         v.speed = 0;
+        if (v.disappearImmediately) {
+          if (v.onArrived) {
+            v.onArrived();
+            v.onArrived = undefined;
+          }
+          this.scene.remove(v.mesh);
+          this.vehicles.splice(i, 1);
+        }
         continue;
       }
 

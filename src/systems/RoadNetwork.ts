@@ -92,6 +92,80 @@ export class RoadNetwork {
   }
 
   /**
+   * 批次建立邊界橫貫高速公路 (從西邊界 gx=minGx 到東邊界 gx=maxGx)
+   */
+  public createHighwayCorridor(gz: number = 97, minGx: number = -99, maxGx: number = 99): void {
+    for (let gx = minGx; gx <= maxGx; gx += 2) {
+      const key = `${gx},${gz}`;
+      if (!this.tiles.has(key)) {
+        const mesh = new THREE.Mesh(this.roadGeometry, RoadTextureFactory.getStraightMaterials());
+        mesh.position.set(gx, 0.03, gz);
+        mesh.rotation.y = Math.PI / 2; // 東西向
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        this.scene.add(mesh);
+
+        const sidewalkGroup = new THREE.Group();
+        this.scene.add(sidewalkGroup);
+
+        this.tiles.set(key, {
+          key,
+          gx,
+          gz,
+          type: 'Straight',
+          orientation: 'X',
+          rotationY: mesh.rotation.y,
+          mesh,
+          sidewalkGroup,
+          connectedNeighbors: [],
+          lanes: [],
+        });
+      }
+    }
+
+    // 重新拓撲分類與車道編織
+    for (const tile of this.tiles.values()) {
+      this.refreshTileClassification(tile);
+    }
+    this.rebuildLaneGraph();
+  }
+
+  /**
+   * 取得外部公路西側進口車道 (向東行駛，起點於 gx=-99, gz=97)
+   */
+  public getHighwayWestEntryLane(): DirectedLane | null {
+    return this.allLanes.get('lane_-99_97_E') ?? null;
+  }
+
+  /**
+   * 取得外部公路東側進口車道 (向西行駛，起點於 gx=99, gz=97)
+   */
+  public getHighwayEastEntryLane(): DirectedLane | null {
+    return this.allLanes.get('lane_99_97_W') ?? null;
+  }
+
+  /**
+   * 取得外部公路西側出口車道 (向西駛離地圖，終點於 gx=-99, gz=97)
+   */
+  public getHighwayWestExitLane(): DirectedLane | null {
+    return this.allLanes.get('lane_-99_97_W') ?? null;
+  }
+
+  /**
+   * 取得外部公路東側出口車道 (向東駛離地圖，終點於 gx=99, gz=97)
+   */
+  public getHighwayEastExitLane(): DirectedLane | null {
+    return this.allLanes.get('lane_99_97_E') ?? null;
+  }
+
+  /**
+   * 取得外部公路進城車道 (西側或東側進口均可作為進城起點)
+   */
+  public getExternalSpawnLane(): DirectedLane | null {
+    return this.getHighwayWestEntryLane() || this.getHighwayEastEntryLane();
+  }
+
+  /**
    * 新增或更新單一車道路塊
    */
   public addOrUpdateTile(gx: number, gz: number, defaultOrientation: 'X' | 'Z'): void {
@@ -473,6 +547,44 @@ export class RoadNetwork {
           };
           tile.lanes.push(laneN);
           this.allLanes.set(laneN.id, laneN);
+
+          // 若為路段末端死巷 (DeadEnd)，動態生成平滑掉頭 (U-Turn) 弧線車道
+          if (type === 'DeadEnd') {
+            if (!hasN) {
+              const uWps = this.sampleBezier(exitN, new THREE.Vector3(gx, 0.04, gz - 0.75), entryS, 4);
+              const uTurnN: DirectedLane = {
+                id: `lane_${gx}_${gz}_UTurn_N`,
+                tileKey: tile.key,
+                direction: 'S',
+                entryPoint: exitN,
+                centerPoint: uWps[Math.floor(uWps.length / 2)],
+                exitPoint: entryS,
+                waypoints: uWps,
+                connectedNextLaneIds: [],
+                speedLimit: 8.3,
+                isIntersection: false,
+              };
+              tile.lanes.push(uTurnN);
+              this.allLanes.set(uTurnN.id, uTurnN);
+            }
+            if (!hasS) {
+              const uWps = this.sampleBezier(exitS, new THREE.Vector3(gx, 0.04, gz + 0.75), entryN, 4);
+              const uTurnS: DirectedLane = {
+                id: `lane_${gx}_${gz}_UTurn_S`,
+                tileKey: tile.key,
+                direction: 'N',
+                entryPoint: exitS,
+                centerPoint: uWps[Math.floor(uWps.length / 2)],
+                exitPoint: entryN,
+                waypoints: uWps,
+                connectedNextLaneIds: [],
+                speedLimit: 8.3,
+                isIntersection: false,
+              };
+              tile.lanes.push(uTurnS);
+              this.allLanes.set(uTurnS.id, uTurnS);
+            }
+          }
         } else {
           // 東西向車道
           // 東向車道 (E): entry 在西, exit 在東, 靠右行駛置中於 Z = +0.325
@@ -512,6 +624,44 @@ export class RoadNetwork {
           };
           tile.lanes.push(laneW);
           this.allLanes.set(laneW.id, laneW);
+
+          // 東西向路段末端死巷 (DeadEnd) 掉頭車道
+          if (type === 'DeadEnd') {
+            if (!hasE) {
+              const uWps = this.sampleBezier(exitE, new THREE.Vector3(gx + 0.75, 0.04, gz), entryW, 4);
+              const uTurnE: DirectedLane = {
+                id: `lane_${gx}_${gz}_UTurn_E`,
+                tileKey: tile.key,
+                direction: 'W',
+                entryPoint: exitE,
+                centerPoint: uWps[Math.floor(uWps.length / 2)],
+                exitPoint: entryW,
+                waypoints: uWps,
+                connectedNextLaneIds: [],
+                speedLimit: 8.3,
+                isIntersection: false,
+              };
+              tile.lanes.push(uTurnE);
+              this.allLanes.set(uTurnE.id, uTurnE);
+            }
+            if (!hasW) {
+              const uWps = this.sampleBezier(exitW, new THREE.Vector3(gx - 0.75, 0.04, gz), entryE, 4);
+              const uTurnW: DirectedLane = {
+                id: `lane_${gx}_${gz}_UTurn_W`,
+                tileKey: tile.key,
+                direction: 'E',
+                entryPoint: exitW,
+                centerPoint: uWps[Math.floor(uWps.length / 2)],
+                exitPoint: entryE,
+                waypoints: uWps,
+                connectedNextLaneIds: [],
+                speedLimit: 8.3,
+                isIntersection: false,
+              };
+              tile.lanes.push(uTurnW);
+              this.allLanes.set(uTurnW.id, uTurnW);
+            }
+          }
         }
       } else if (type === 'Corner') {
         // 90 度彎道：生成兩條平滑弧線車道

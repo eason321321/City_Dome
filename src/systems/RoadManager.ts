@@ -50,6 +50,7 @@ export class RoadManager {
   private currentTreasury: number = 50000;
   private onTreasuryChange?: TreasuryUpdater;
   private onPreviewInfoChange?: (info: { cellCount: number; cost: number; isValid: boolean } | null) => void;
+  private onRoadsPlaced?: () => void;
 
   // 射線器
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
@@ -79,6 +80,96 @@ export class RoadManager {
     this.scene.add(this.previewGroup);
 
     this.bindEvents();
+
+    // 建立地圖南側邊界連接外部城市之初始車道與聯外門架
+    this.initExternalConnection();
+  }
+
+  /**
+   * 建立地圖南側邊界 (Z=97) 從西邊界 (-99) 貫通至東邊界 (+99) 的橫貫外部公路
+   */
+  private initExternalConnection(): void {
+    const HIGHWAY_Z = 97;
+    this.roadNetwork.createHighwayCorridor(HIGHWAY_Z, -99, 99);
+
+    // 於西側與東側邊界各建立一座高規格高速公路門架
+    this.createHighwayGantry(-99, HIGHWAY_Z, '西側邊界聯外公路 (West Highway Portal)');
+    this.createHighwayGantry(99, HIGHWAY_Z, '東側邊界聯外公路 (East Highway Portal)');
+  }
+
+  private createHighwayGantry(gx: number, gz: number, title: string): void {
+    const gantry = new THREE.Group();
+    gantry.name = `HighwayGantry_${gx}`;
+
+    const steelMat = new THREE.MeshStandardMaterial({
+      color: 0x475569, // 鋼鐵灰
+      roughness: 0.4,
+      metalness: 0.7,
+    });
+
+    // 跨越東西向道路之南北雙側立柱 (Z 軸向跨立)
+    const colGeo = new THREE.CylinderGeometry(0.08, 0.08, 3.4, 8);
+    const northCol = new THREE.Mesh(colGeo, steelMat);
+    northCol.position.set(gx, 1.7, gz - 1.6);
+    gantry.add(northCol);
+
+    const southCol = new THREE.Mesh(colGeo, steelMat);
+    southCol.position.set(gx, 1.7, gz + 1.6);
+    gantry.add(southCol);
+
+    // 頂部跨樑 (沿 Z 軸橫越車道)
+    const beamGeo = new THREE.BoxGeometry(0.25, 0.16, 3.6);
+    const beam = new THREE.Mesh(beamGeo, steelMat);
+    beam.position.set(gx, 3.3, gz);
+    gantry.add(beam);
+
+    // 綠色高速公路聯外告示牌
+    const signCanvas = document.createElement('canvas');
+    signCanvas.width = 512;
+    signCanvas.height = 128;
+    const ctx = signCanvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#15803d'; // 高速公路綠
+      ctx.fillRect(0, 0, 512, 128);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(6, 6, 500, 116);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 30px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`🌐 ${title}`, 256, 44);
+      ctx.font = '24px sans-serif';
+      ctx.fillStyle = '#fde047';
+      ctx.fillText('⚡ 邊境過境公路 ↔ 聯外交通幹線', 256, 88);
+    }
+    const signTex = new THREE.CanvasTexture(signCanvas);
+    const signMat = new THREE.MeshBasicMaterial({ map: signTex });
+    const signGeo = new THREE.PlaneGeometry(2.4, 0.6);
+
+    // 正面告示牌 (面向地圖內部)
+    const signMeshIn = new THREE.Mesh(signGeo, signMat);
+    signMeshIn.rotation.y = gx < 0 ? Math.PI / 2 : -Math.PI / 2;
+    signMeshIn.position.set(gx + (gx < 0 ? 0.13 : -0.13), 2.65, gz);
+    gantry.add(signMeshIn);
+
+    // 反面告示牌 (面向地圖外部)
+    const signMeshOut = new THREE.Mesh(signGeo, signMat);
+    signMeshOut.rotation.y = gx < 0 ? -Math.PI / 2 : Math.PI / 2;
+    signMeshOut.position.set(gx + (gx < 0 ? -0.13 : 0.13), 2.65, gz);
+    gantry.add(signMeshOut);
+
+    // 頂部黃色閃爍警示燈
+    const lightGeo = new THREE.SphereGeometry(0.1, 8, 8);
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    const leftLight = new THREE.Mesh(lightGeo, lightMat);
+    leftLight.position.set(gx, 3.45, gz - 1.2);
+    gantry.add(leftLight);
+    const rightLight = new THREE.Mesh(lightGeo, lightMat);
+    rightLight.position.set(gx, 3.45, gz + 1.2);
+    gantry.add(rightLight);
+
+    this.scene.add(gantry);
   }
 
   public getRoadNetwork(): RoadNetwork {
@@ -100,6 +191,10 @@ export class RoadManager {
   ): void {
     this.onTreasuryChange = updater;
     this.onPreviewInfoChange = infoChange;
+  }
+
+  public setOnRoadsPlacedCallback(cb: () => void): void {
+    this.onRoadsPlaced = cb;
   }
 
   public setTreasury(amount: number): void {
@@ -275,6 +370,11 @@ export class RoadManager {
     }
 
     console.log(`🛣️ 成功鋪設 ${cells.length} 格雙向二線車道！扣除 $${totalCost}，剩餘: $${this.currentTreasury}`);
+
+    // 通知外部路網更新（如土地劃分小格子同步更新）
+    if (this.onRoadsPlaced) {
+      this.onRoadsPlaced();
+    }
 
     // 重設起點，支援連續建造
     this.startPoint = null;
