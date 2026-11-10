@@ -1,0 +1,708 @@
+import * as THREE from 'three';
+import { RoadTextureFactory } from '../rendering/RoadTextureFactory';
+import { TrafficLightRenderer, TrafficSignalState } from '../rendering/TrafficLightRenderer';
+
+export type RoadTileType = 'Straight' | 'Corner' | 'ThreeWay' | 'FourWay' | 'DeadEnd';
+
+export interface DirectedLane {
+  id: string;                      // 唯一車道編號，例如 "lane_1_1_S"
+  tileKey: string;
+  direction: 'N' | 'S' | 'E' | 'W';// 行駛方位 (N=-Z, S=+Z, E=+X, W=-X)
+  entryPoint: THREE.Vector3;       // 進入車道點 (世界座標)
+  centerPoint: THREE.Vector3;      // 車道中心點
+  exitPoint: THREE.Vector3;        // 離開車道點
+  waypoints: THREE.Vector3[];      // 平滑路徑點序列 (車輛行駛依循此序列)
+  connectedNextLaneIds: string[];  // 下游可無縫銜接的車道編號 (支援尋路)
+  speedLimit: number;              // 速限 (m/s)
+  isIntersection: boolean;
+  intersectionKey?: string;        // 若為路口車道，記錄所屬之 Intersection Key
+  controllingSignal?: 'northSouth' | 'eastWest'; // 控制進入該車道之號誌
+}
+
+export interface IntersectionData {
+  key: string;
+  gx: number;
+  gz: number;
+  type: 'ThreeWay' | 'FourWay';
+  trafficLight: TrafficLightRenderer | null;
+  phase: 'NorthSouthGreen' | 'NorthSouthYellow' | 'AllRed1' | 'EastWestGreen' | 'EastWestYellow' | 'AllRed2';
+  timer: number;
+  signalState: TrafficSignalState;
+  hasNorthSouth: boolean;
+  hasEastWest: boolean;
+}
+
+export interface RoadTile {
+  key: string;                     // "gx,gz"
+  gx: number;
+  gz: number;
+  type: RoadTileType;
+  orientation: 'X' | 'Z';
+  rotationY: number;
+  mesh: THREE.Mesh;
+  sidewalkGroup: THREE.Group;      // 兩側立體高架人行道網格群組
+  connectedNeighbors: string[];    // 相鄰相通的格位 key
+  lanes: DirectedLane[];           // 本格位內部承載的車道
+}
+
+/**
+ * 道路有向網絡圖與路口控制核心 (RoadNetwork)
+ * 負責：
+ * 1. 自動拓撲計算（直線相連、十字路口、T 字路口、彎道）
+ * 2. 路口標線與斑馬線動態切換
+ * 3. 3D 紅綠燈狀態機管理（隨虛擬世界時間切換號誌，紀錄於節點）
+ * 4. 車道層級連續有向圖（分批鋪設之同方向車道自動縫合，支援未來尋路與車流運行）
+ */
+export class RoadNetwork {
+  private scene: THREE.Scene;
+  private tiles: Map<string, RoadTile> = new Map();
+  private intersections: Map<string, IntersectionData> = new Map();
+  private allLanes: Map<string, DirectedLane> = new Map();
+
+  // 共享道路幾何體 (2m x 0.05m x 2m)
+  private roadGeometry: THREE.BoxGeometry = new THREE.BoxGeometry(2, 0.05, 2);
+
+  // 號誌時間參數 (虛擬秒數)
+  private readonly GREEN_TIME = 8.0;
+  private readonly YELLOW_TIME = 2.0;
+  private readonly ALL_RED_TIME = 1.0;
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+  }
+
+  public getTile(key: string): RoadTile | undefined {
+    return this.tiles.get(key);
+  }
+
+  public getAllTiles(): IterableIterator<RoadTile> {
+    return this.tiles.values();
+  }
+
+  public getIntersection(key: string): IntersectionData | undefined {
+    return this.intersections.get(key);
+  }
+
+  public getAllLanes(): Map<string, DirectedLane> {
+    return this.allLanes;
+  }
+
+  public hasTile(key: string): boolean {
+    return this.tiles.has(key);
+  }
+
+  /**
+   * 新增或更新單一車道路塊
+   */
+  public addOrUpdateTile(gx: number, gz: number, defaultOrientation: 'X' | 'Z'): void {
+    const key = `${gx},${gz}`;
+    if (!this.tiles.has(key)) {
+      // 初始創建為標準直線車道底層
+      const mesh = new THREE.Mesh(this.roadGeometry, RoadTextureFactory.getStraightMaterials());
+      mesh.position.set(gx, 0.03, gz);
+      mesh.rotation.y = defaultOrientation === 'X' ? Math.PI / 2 : 0;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+
+      // 人行道群組
+      const sidewalkGroup = new THREE.Group();
+      this.scene.add(sidewalkGroup);
+
+      this.tiles.set(key, {
+        key,
+        gx,
+        gz,
+        type: 'Straight',
+        orientation: defaultOrientation,
+        rotationY: mesh.rotation.y,
+        mesh,
+        sidewalkGroup,
+        connectedNeighbors: [],
+        lanes: [],
+      });
+    }
+
+    // 重建本格與周圍 4 鄰居的相鄰拓撲與車道圖
+    this.rebuildTopologyAround(gx, gz);
+  }
+
+  /**
+   * 重建特定點周圍半徑內的相交與連通關係
+   */
+  public rebuildTopologyAround(centerGx: number, centerGz: number): void {
+    const affectedKeys: Set<string> = new Set();
+    const offsets = [
+      { dx: 0, dz: 0 },
+      { dx: 0, dz: -2 }, // 北
+      { dx: 0, dz: 2 },  // 南
+      { dx: 2, dz: 0 },  // 東
+      { dx: -2, dz: 0 }, // 西
+    ];
+
+    for (const off of offsets) {
+      const k = `${centerGx + off.dx},${centerGz + off.dz}`;
+      if (this.tiles.has(k)) {
+        affectedKeys.add(k);
+      }
+    }
+
+    // 1. 重新識別每個受影響格位的相鄰鄰居與路口類型
+    for (const key of affectedKeys) {
+      this.refreshTileClassification(this.tiles.get(key)!);
+    }
+
+    // 2. 重新編織所有受影響格位間的連續車道有向圖
+    this.rebuildLaneGraph();
+  }
+
+  /**
+   * 刷新單一格位的連接拓撲與幾何材質
+   */
+  private refreshTileClassification(tile: RoadTile): void {
+    const { gx, gz } = tile;
+    const northKey = `${gx},${gz - 2}`;
+    const southKey = `${gx},${gz + 2}`;
+    const eastKey = `${gx + 2},${gz}`;
+    const westKey = `${gx - 2},${gz}`;
+
+    const hasN = this.tiles.has(northKey);
+    const hasS = this.tiles.has(southKey);
+    const hasE = this.tiles.has(eastKey);
+    const hasW = this.tiles.has(westKey);
+
+    const neighbors: string[] = [];
+    if (hasN) neighbors.push(northKey);
+    if (hasS) neighbors.push(southKey);
+    if (hasE) neighbors.push(eastKey);
+    if (hasW) neighbors.push(westKey);
+
+    tile.connectedNeighbors = neighbors;
+    const degree = neighbors.length;
+
+    let newType: RoadTileType = 'Straight';
+    let newRotY = 0;
+    let newMaterials = RoadTextureFactory.getStraightMaterials();
+    let isIntersection = false;
+
+    if (degree === 4) {
+      // 十字路口 (Four-Way)
+      newType = 'FourWay';
+      newMaterials = RoadTextureFactory.getFourWayMaterials();
+      newRotY = 0;
+      isIntersection = true;
+    } else if (degree === 3) {
+      // T 字路口 (Three-Way)
+      newType = 'ThreeWay';
+      newMaterials = RoadTextureFactory.getThreeWayMaterials();
+      isIntersection = true;
+
+      // 判斷哪一側是貫通無開口側（無路的一側）
+      // 基準（newRotY = 0）：西側無路（連續人行道在西），開口與斑馬線在東
+      if (!hasW) newRotY = 0;                      // 西側無路，支線在東
+      else if (!hasN) newRotY = (3 * Math.PI) / 2; // 北側無路，支線在南
+      else if (!hasE) newRotY = Math.PI;           // 東側無路，支線在西
+      else if (!hasS) newRotY = Math.PI / 2;       // 南側無路，支線在北
+    } else if (degree === 2) {
+      if (hasN && hasS) {
+        // 南北直通
+        newType = 'Straight';
+        newMaterials = RoadTextureFactory.getStraightMaterials();
+        newRotY = 0;
+      } else if (hasE && hasW) {
+        // 東西直通
+        newType = 'Straight';
+        newMaterials = RoadTextureFactory.getStraightMaterials();
+        newRotY = Math.PI / 2;
+      } else {
+        // 90 度彎道 (Corner)
+        // 基準（newRotY = 0）：連接南 (+Z) 與東 (+X)
+        newType = 'Corner';
+        newMaterials = RoadTextureFactory.getCornerMaterials();
+        if (hasS && hasE) newRotY = 0;
+        else if (hasN && hasE) newRotY = Math.PI / 2;
+        else if (hasN && hasW) newRotY = Math.PI;
+        else if (hasS && hasW) newRotY = (3 * Math.PI) / 2;
+      }
+    } else if (degree === 1) {
+      newType = 'DeadEnd';
+      newMaterials = RoadTextureFactory.getStraightMaterials();
+      // 依鄰居方向判定直線朝向 (鄰居在東西則為 X 軸水平直道，在南北則為 Z 軸垂直直道)
+      newRotY = hasE || hasW ? Math.PI / 2 : 0;
+    } else {
+      // 孤立單格
+      newType = 'Straight';
+      newMaterials = RoadTextureFactory.getStraightMaterials();
+      newRotY = tile.orientation === 'X' ? Math.PI / 2 : 0;
+    }
+
+    tile.type = newType;
+    tile.rotationY = newRotY;
+    tile.mesh.rotation.y = newRotY;
+    tile.mesh.material = newMaterials;
+
+    // 重建立體高架人行道實體
+    this.updateSidewalkMeshes(tile);
+
+    // 處理紅綠燈實體 (僅在十字或 T 字路口生成)
+    if (isIntersection) {
+      const hasNS = hasN || hasS;
+      const hasEW = hasE || hasW;
+      this.ensureIntersection(tile.key, gx, gz, newType as 'ThreeWay' | 'FourWay', hasNS, hasEW);
+    } else {
+      this.removeIntersection(tile.key);
+    }
+  }
+
+  /**
+   * 重建本格位的立體高架人行道實體
+   * 人行道寬度 0.35m，高度比車道高出 0.035m，具備獨立混凝土方磚材質與投影
+   */
+  private updateSidewalkMeshes(tile: RoadTile): void {
+    tile.sidewalkGroup.clear();
+    tile.sidewalkGroup.position.set(tile.gx, 0, tile.gz);
+    tile.sidewalkGroup.rotation.y = tile.rotationY;
+
+    const swMat = RoadTextureFactory.getSidewalkMaterial();
+    const swHeight = 0.07;
+    const swPosY = 0.035; // 頂部高達 0.07m (比車道 0.035m 高出 0.035m，形成真實路緣階梯)
+
+    const addBox = (w: number, d: number, localX: number, localZ: number) => {
+      const geo = new THREE.BoxGeometry(w, swHeight, d);
+      const mesh = new THREE.Mesh(geo, swMat);
+      mesh.position.set(localX, swPosY, localZ);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      tile.sidewalkGroup.add(mesh);
+    };
+
+    switch (tile.type) {
+      case 'Straight':
+      case 'DeadEnd':
+        // 直線道路與路段末端：兩側各寬 0.35m 之高架立體人行道，車道中間 1.3m 全程暢通（絕不產生橫向人行道阻擋）
+        addBox(0.35, 2.0, -0.825, 0);
+        addBox(0.35, 2.0, +0.825, 0);
+        break;
+
+      case 'FourWay':
+        // 十字路口四個轉角處的人行廣場小平台 (0.35m x 0.35m)
+        // 斑馬線緊貼於四角平台之間，斑馬線寬度與人行道完全一致 (0.35m)
+        addBox(0.35, 0.35, -0.825, -0.825);
+        addBox(0.35, 0.35, +0.825, -0.825);
+        addBox(0.35, 0.35, -0.825, +0.825);
+        addBox(0.35, 0.35, +0.825, +0.825);
+        break;
+
+      case 'ThreeWay':
+        // T 字路口：西側為直線貫通高架人行道，東側兩角為支線兩旁之人行廣場小平台
+        // 直線部分車道全程暢通，僅支線設有橫跨車道之人行穿越道
+        addBox(0.35, 2.0, -0.825, 0);
+        addBox(0.35, 0.35, +0.825, -0.825);
+        addBox(0.35, 0.35, +0.825, +0.825);
+        break;
+
+      case 'Corner':
+        // 轉彎道外側連續高架人行道 (覆蓋西側與北側，無縫銜接相鄰兩條車道外側人行道)
+        addBox(0.35, 2.0, -0.825, 0);
+        addBox(1.65, 0.35, 0.175, -0.825);
+        // 外側轉角梯形/方形補齊 (填滿外側轉角至外弧半徑處)
+        addBox(0.5, 0.5, -0.4, -0.4);
+        // 轉彎道內側轉角人行道 (精準連接相鄰兩條車道內側人行道)
+        addBox(0.35, 0.35, +0.825, +0.825);
+        break;
+    }
+  }
+
+  /**
+   * 確保並管理路口號誌燈箱與記錄節點
+   */
+  private ensureIntersection(
+    key: string,
+    gx: number,
+    gz: number,
+    type: 'ThreeWay' | 'FourWay',
+    hasNS: boolean,
+    hasEW: boolean
+  ): void {
+    let inter = this.intersections.get(key);
+    if (!inter) {
+      const trafficLight = new TrafficLightRenderer(gx, gz, hasNS, hasEW);
+      this.scene.add(trafficLight.group);
+
+      inter = {
+        key,
+        gx,
+        gz,
+        type,
+        trafficLight,
+        phase: 'NorthSouthGreen',
+        timer: this.GREEN_TIME,
+        signalState: { northSouth: 'green', eastWest: 'red' },
+        hasNorthSouth: hasNS,
+        hasEastWest: hasEW,
+      };
+      this.intersections.set(key, inter);
+    } else {
+      inter.type = type;
+      inter.hasNorthSouth = hasNS;
+      inter.hasEastWest = hasEW;
+    }
+  }
+
+  private removeIntersection(key: string): void {
+    const inter = this.intersections.get(key);
+    if (inter) {
+      if (inter.trafficLight) {
+        inter.trafficLight.destroy(this.scene);
+      }
+      this.intersections.delete(key);
+    }
+  }
+
+  /**
+   * 每幀更新紅綠燈倒數計時與狀態機（依世界時間驅動）
+   */
+  public updateSignals(deltaTime: number): void {
+    if (deltaTime <= 0) return;
+
+    for (const inter of this.intersections.values()) {
+      inter.timer -= deltaTime;
+      if (inter.timer <= 0) {
+        // 進入下一個號誌相位
+        switch (inter.phase) {
+          case 'NorthSouthGreen':
+            inter.phase = 'NorthSouthYellow';
+            inter.timer = this.YELLOW_TIME;
+            inter.signalState = { northSouth: 'yellow', eastWest: 'red' };
+            break;
+          case 'NorthSouthYellow':
+            inter.phase = 'AllRed1';
+            inter.timer = this.ALL_RED_TIME;
+            inter.signalState = { northSouth: 'red', eastWest: 'red' };
+            break;
+          case 'AllRed1':
+            inter.phase = 'EastWestGreen';
+            inter.timer = this.GREEN_TIME;
+            inter.signalState = { northSouth: 'red', eastWest: 'green' };
+            break;
+          case 'EastWestGreen':
+            inter.phase = 'EastWestYellow';
+            inter.timer = this.YELLOW_TIME;
+            inter.signalState = { northSouth: 'red', eastWest: 'yellow' };
+            break;
+          case 'EastWestYellow':
+            inter.phase = 'AllRed2';
+            inter.timer = this.ALL_RED_TIME;
+            inter.signalState = { northSouth: 'red', eastWest: 'red' };
+            break;
+          case 'AllRed2':
+            inter.phase = 'NorthSouthGreen';
+            inter.timer = this.GREEN_TIME;
+            inter.signalState = { northSouth: 'green', eastWest: 'red' };
+            break;
+        }
+
+        // 視覺刷新發光燈號
+        if (inter.trafficLight) {
+          inter.trafficLight.updateLights(inter.signalState);
+        }
+      }
+    }
+  }
+
+  /**
+   * 重建全網車道有向圖（生成連續且具備連通性的 LaneGraph）
+   * 即使玩家分批放置車道，只要相鄰接觸，車道立即自動融合成連續網路！
+   */
+  private rebuildLaneGraph(): void {
+    this.allLanes.clear();
+
+    // 車道中心線偏移行車距（車道淨寬 0.65m，中心點位於對向黃線 0m 與外側白線 0.65m 之正中間 0.325m）
+    const LANE_OFFSET = 0.325;
+
+    // 1. 為每個格位建立車道有向圖實體
+    for (const tile of this.tiles.values()) {
+      tile.lanes = [];
+      const { gx, gz, type } = tile;
+
+      // 檢查各向鄰居是否存在
+      const hasN = this.tiles.has(`${gx},${gz - 2}`);
+      const hasS = this.tiles.has(`${gx},${gz + 2}`);
+      const hasE = this.tiles.has(`${gx + 2},${gz}`);
+      const hasW = this.tiles.has(`${gx - 2},${gz}`);
+
+      if (type === 'Straight' || type === 'DeadEnd') {
+        // 直線或盡頭路段
+        const isNorthSouth = tile.rotationY === 0;
+
+        if (isNorthSouth) {
+          // 南向車道 (S): entry 在北, exit 在南, 靠右行駛置中於 X = -0.325
+          const entryS = new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 1.0);
+          const centerS = new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz);
+          const exitS = new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + 1.0);
+          const laneS: DirectedLane = {
+            id: `lane_${gx}_${gz}_S`,
+            tileKey: tile.key,
+            direction: 'S',
+            entryPoint: entryS,
+            centerPoint: centerS,
+            exitPoint: exitS,
+            waypoints: [entryS, centerS, exitS],
+            connectedNextLaneIds: [],
+            speedLimit: 13.8,
+            isIntersection: false,
+          };
+          tile.lanes.push(laneS);
+          this.allLanes.set(laneS.id, laneS);
+
+          // 北向車道 (N): entry 在南, exit 在北, 靠右行駛置中於 X = +0.325
+          const entryN = new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 1.0);
+          const centerN = new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz);
+          const exitN = new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - 1.0);
+          const laneN: DirectedLane = {
+            id: `lane_${gx}_${gz}_N`,
+            tileKey: tile.key,
+            direction: 'N',
+            entryPoint: entryN,
+            centerPoint: centerN,
+            exitPoint: exitN,
+            waypoints: [entryN, centerN, exitN],
+            connectedNextLaneIds: [],
+            speedLimit: 13.8,
+            isIntersection: false,
+          };
+          tile.lanes.push(laneN);
+          this.allLanes.set(laneN.id, laneN);
+        } else {
+          // 東西向車道
+          // 東向車道 (E): entry 在西, exit 在東, 靠右行駛置中於 Z = +0.325
+          const entryE = new THREE.Vector3(gx - 1.0, 0.04, gz + LANE_OFFSET);
+          const centerE = new THREE.Vector3(gx, 0.04, gz + LANE_OFFSET);
+          const exitE = new THREE.Vector3(gx + 1.0, 0.04, gz + LANE_OFFSET);
+          const laneE: DirectedLane = {
+            id: `lane_${gx}_${gz}_E`,
+            tileKey: tile.key,
+            direction: 'E',
+            entryPoint: entryE,
+            centerPoint: centerE,
+            exitPoint: exitE,
+            waypoints: [entryE, centerE, exitE],
+            connectedNextLaneIds: [],
+            speedLimit: 13.8,
+            isIntersection: false,
+          };
+          tile.lanes.push(laneE);
+          this.allLanes.set(laneE.id, laneE);
+
+          // 西向車道 (W): entry 在東, exit 在西, 靠右行駛置中於 Z = -0.325
+          const entryW = new THREE.Vector3(gx + 1.0, 0.04, gz - LANE_OFFSET);
+          const centerW = new THREE.Vector3(gx, 0.04, gz - LANE_OFFSET);
+          const exitW = new THREE.Vector3(gx - 1.0, 0.04, gz - LANE_OFFSET);
+          const laneW: DirectedLane = {
+            id: `lane_${gx}_${gz}_W`,
+            tileKey: tile.key,
+            direction: 'W',
+            entryPoint: entryW,
+            centerPoint: centerW,
+            exitPoint: exitW,
+            waypoints: [entryW, centerW, exitW],
+            connectedNextLaneIds: [],
+            speedLimit: 13.8,
+            isIntersection: false,
+          };
+          tile.lanes.push(laneW);
+          this.allLanes.set(laneW.id, laneW);
+        }
+      } else if (type === 'Corner') {
+        // 90 度彎道：生成兩條平滑弧線車道
+        const addCornerLane = (
+          id: string,
+          dir: 'N' | 'S' | 'E' | 'W',
+          p0: THREE.Vector3,
+          p1: THREE.Vector3,
+          p2: THREE.Vector3
+        ) => {
+          const wps = this.sampleBezier(p0, p1, p2, 6);
+          const lane: DirectedLane = {
+            id,
+            tileKey: tile.key,
+            direction: dir,
+            entryPoint: p0,
+            centerPoint: wps[Math.floor(wps.length / 2)],
+            exitPoint: p2,
+            waypoints: wps,
+            connectedNextLaneIds: [],
+            speedLimit: 11.1, // 40 km/h 轉彎減速
+            isIntersection: false,
+          };
+          tile.lanes.push(lane);
+          this.allLanes.set(lane.id, lane);
+        };
+
+        if (hasS && hasW) {
+          // 西往南 (右轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_W_to_S`,
+            'S',
+            new THREE.Vector3(gx - 1.0, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + 1.0)
+          );
+          // 南往西 (左轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_S_to_W`,
+            'W',
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 1.0),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx - 1.0, 0.04, gz - LANE_OFFSET)
+          );
+        } else if (hasS && hasE) {
+          // 東往南 (左轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_E_to_S`,
+            'S',
+            new THREE.Vector3(gx + 1.0, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + 1.0)
+          );
+          // 南往東 (右轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_S_to_E`,
+            'E',
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 1.0),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx + 1.0, 0.04, gz + LANE_OFFSET)
+          );
+        } else if (hasN && hasE) {
+          // 北往東 (右轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_N_to_E`,
+            'E',
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 1.0),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx + 1.0, 0.04, gz + LANE_OFFSET)
+          );
+          // 東往北 (左轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_E_to_N`,
+            'N',
+            new THREE.Vector3(gx + 1.0, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - 1.0)
+          );
+        } else if (hasN && hasW) {
+          // 北往西 (左轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_N_to_W`,
+            'W',
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 1.0),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx - 1.0, 0.04, gz - LANE_OFFSET)
+          );
+          // 西往北 (右轉)
+          addCornerLane(
+            `lane_${gx}_${gz}_W_to_N`,
+            'N',
+            new THREE.Vector3(gx - 1.0, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - 1.0)
+          );
+        }
+      } else if (type === 'ThreeWay' || type === 'FourWay') {
+        // 路口：生成所有合法連通之直行與轉彎車道，並掛載號誌控制器
+        const addIntersectionLane = (
+          id: string,
+          dir: 'N' | 'S' | 'E' | 'W',
+          p0: THREE.Vector3,
+          p1: THREE.Vector3,
+          p2: THREE.Vector3,
+          ctrlSignal: 'northSouth' | 'eastWest'
+        ) => {
+          const wps = this.sampleBezier(p0, p1, p2, 6);
+          const lane: DirectedLane = {
+            id,
+            tileKey: tile.key,
+            direction: dir,
+            entryPoint: p0,
+            centerPoint: wps[Math.floor(wps.length / 2)],
+            exitPoint: p2,
+            waypoints: wps,
+            connectedNextLaneIds: [],
+            speedLimit: 9.7, // 35 km/h 路口減速慢行
+            isIntersection: true,
+            intersectionKey: tile.key,
+            controllingSignal: ctrlSignal,
+          };
+          tile.lanes.push(lane);
+          this.allLanes.set(lane.id, lane);
+        };
+
+        // 入口點定義 (Inbound) - 置中於 0.325m
+        const inN = new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 1.0);
+        const inS = new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 1.0);
+        const inE = new THREE.Vector3(gx + 1.0, 0.04, gz - LANE_OFFSET);
+        const inW = new THREE.Vector3(gx - 1.0, 0.04, gz + LANE_OFFSET);
+
+        // 出口點定義 (Outbound) - 置中於 0.325m
+        const outN = new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - 1.0);
+        const outS = new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + 1.0);
+        const outE = new THREE.Vector3(gx + 1.0, 0.04, gz + LANE_OFFSET);
+        const outW = new THREE.Vector3(gx - 1.0, 0.04, gz - LANE_OFFSET);
+
+        // 從北進入 (受南北向號誌控制)
+        if (hasN) {
+          if (hasS) addIntersectionLane(`lane_${gx}_${gz}_N_to_S`, 'S', inN, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz), outS, 'northSouth');
+          if (hasW) addIntersectionLane(`lane_${gx}_${gz}_N_to_W`, 'W', inN, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - LANE_OFFSET), outW, 'northSouth');
+          if (hasE) addIntersectionLane(`lane_${gx}_${gz}_N_to_E`, 'E', inN, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + LANE_OFFSET), outE, 'northSouth');
+        }
+
+        // 從南進入 (受南北向號誌控制)
+        if (hasS) {
+          if (hasN) addIntersectionLane(`lane_${gx}_${gz}_S_to_N`, 'N', inS, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz), outN, 'northSouth');
+          if (hasE) addIntersectionLane(`lane_${gx}_${gz}_S_to_E`, 'E', inS, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + LANE_OFFSET), outE, 'northSouth');
+          if (hasW) addIntersectionLane(`lane_${gx}_${gz}_S_to_W`, 'W', inS, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - LANE_OFFSET), outW, 'northSouth');
+        }
+
+        // 從東進入 (受東西向號誌控制)
+        if (hasE) {
+          if (hasW) addIntersectionLane(`lane_${gx}_${gz}_E_to_W`, 'W', inE, new THREE.Vector3(gx, 0.04, gz - LANE_OFFSET), outW, 'eastWest');
+          if (hasN) addIntersectionLane(`lane_${gx}_${gz}_E_to_N`, 'N', inE, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - LANE_OFFSET), outN, 'eastWest');
+          if (hasS) addIntersectionLane(`lane_${gx}_${gz}_E_to_S`, 'S', inE, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - LANE_OFFSET), outS, 'eastWest');
+        }
+
+        // 從西進入 (受東西向號誌控制)
+        if (hasW) {
+          if (hasE) addIntersectionLane(`lane_${gx}_${gz}_W_to_E`, 'E', inW, new THREE.Vector3(gx, 0.04, gz + LANE_OFFSET), outE, 'eastWest');
+          if (hasS) addIntersectionLane(`lane_${gx}_${gz}_W_to_S`, 'S', inW, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + LANE_OFFSET), outS, 'eastWest');
+          if (hasN) addIntersectionLane(`lane_${gx}_${gz}_W_to_N`, 'N', inW, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + LANE_OFFSET), outN, 'eastWest');
+        }
+      }
+    }
+
+    // 2. 跨格位車道拓撲自動縫合（透過 exitPoint 與相鄰格位 entryPoint 之空間鄰接自動串接）
+    for (const lane of this.allLanes.values()) {
+      lane.connectedNextLaneIds = [];
+
+      for (const nextLane of this.allLanes.values()) {
+        if (lane.id === nextLane.id) continue;
+        // 檢查前車道出口點是否與後車道入口點緊密吻合 (< 0.08m)
+        if (lane.exitPoint.distanceTo(nextLane.entryPoint) < 0.08) {
+          lane.connectedNextLaneIds.push(nextLane.id);
+        }
+      }
+    }
+  }
+
+  private sampleBezier(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, steps = 6): THREE.Vector3[] {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const it = 1 - t;
+      const x = it * it * p0.x + 2 * it * t * p1.x + t * t * p2.x;
+      const y = it * it * p0.y + 2 * it * t * p1.y + t * t * p2.y;
+      const z = it * it * p0.z + 2 * it * t * p1.z + t * t * p2.z;
+      pts.push(new THREE.Vector3(x, y, z));
+    }
+    return pts;
+  }
+}

@@ -4,6 +4,10 @@ import { TerrainRenderer } from './rendering/TerrainRenderer';
 import { WorldSimulationState, SimulationSpeed, MapOverlayMode } from './types';
 import { TimeManager } from './simulation/TimeManager';
 import { BottomStatusBar } from './ui/BottomStatusBar';
+import { RoadManager } from './systems/RoadManager';
+import { BuildMenu } from './ui/BuildMenu';
+import { VehicleManager } from './simulation/VehicleManager';
+import { DevMenu } from './ui/DevMenu';
 
 console.log('🏗️ City Dome 城市建造模擬器初始化中...');
 
@@ -95,17 +99,45 @@ if (container) {
     population: initialWorldState.stats.population,
     treasury: initialWorldState.stats.treasury,
   });
-  // 保留狀態欄引用以供後續經濟與人口模擬模組即時推播更新
-  void bottomStatusBar;
 
-  // 8. 視窗自適應
+  // 8. 道路網格吸附管理器與左下方建造選單
+  const roadManager = new RoadManager(
+    scene,
+    camera,
+    renderer.domElement,
+    cameraManager,
+    initialWorldState.stats.treasury
+  );
+
+  // 串接道路建造花費與國庫更新
+  roadManager.setTreasuryCallbacks((newTreasury) => {
+    initialWorldState.stats.treasury = newTreasury;
+    bottomStatusBar.updateStats({ treasury: newTreasury });
+  });
+
+  const buildMenu = new BuildMenu(roadManager);
+  void buildMenu;
+
+  // 9. 車輛行駛系統與左上角開發者選單
+  const vehicleManager = new VehicleManager(scene, roadManager.getRoadNetwork());
+  const devMenu = new DevMenu(
+    renderer.domElement,
+    camera,
+    scene,
+    cameraManager,
+    roadManager.getRoadNetwork(),
+    vehicleManager
+  );
+  void devMenu;
+
+  // 10. 視窗自適應
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  // 9. 主渲染與模擬循環
+  // 10. 主渲染與模擬循環
   const clock = new THREE.Clock();
 
   function animate() {
@@ -115,8 +147,14 @@ if (container) {
     // 更新時間與模擬
     timeManager.update(delta);
 
-    // 更新相機與畫面渲染
-    cameraManager.update();
+    // 更新道路網絡（紅綠燈號誌倒數計時與狀態切換）
+    roadManager.update(delta, timeManager.getIsPaused());
+
+    // 更新車輛行駛與號誌停等模擬
+    vehicleManager.update(delta, timeManager.getIsPaused());
+
+    // 更新相機與畫面渲染 (支援 WASD 鍵盤平移)
+    cameraManager.update(delta);
     renderer.render(scene, camera);
   }
   animate();

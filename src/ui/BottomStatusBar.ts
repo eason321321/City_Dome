@@ -84,8 +84,7 @@ export class BottomStatusBar {
       .bottom-status-bar {
         position: fixed;
         bottom: 12px;
-        left: 50%;
-        transform: translateX(-50%);
+        right: 16px;
         display: inline-flex;
         align-items: center;
         gap: 8px;
@@ -218,7 +217,7 @@ export class BottomStatusBar {
     this.container.innerHTML = `
       <!-- 最左邊：開始/暫停按鈕與虛擬時間 -->
       <div class="status-segment time-segment">
-        <button class="play-pause-btn" title="開始 / 暫停 (空白鍵)">
+        <button class="play-pause-btn">
           ${this.getPlayPauseIconHtml(isPaused)}
         </button>
         <div class="time-display">
@@ -229,7 +228,7 @@ export class BottomStatusBar {
 
       <!-- 金錢顯示（鈔票圖標） -->
       <div class="status-segment money-segment">
-        <div class="segment-icon money-icon" title="市政國庫">
+        <div class="segment-icon money-icon">
           <svg width="19" height="15" viewBox="0 0 22 18" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M2 7.5L10 3L20 6.5L12 11L2 7.5Z" fill="#4ade80" stroke="#16a34a" stroke-width="1.2"/>
             <path d="M2 7.5V10.5L12 14V11L2 7.5Z" fill="#22c55e" stroke="#16a34a" stroke-width="1.2"/>
@@ -242,7 +241,7 @@ export class BottomStatusBar {
 
       <!-- 人口顯示（市民圖標） -->
       <div class="status-segment pop-segment">
-        <div class="segment-icon pop-icon" title="城市總人口">
+        <div class="segment-icon pop-icon">
           <svg width="15" height="15" viewBox="0 0 16 16" fill="#38bdf8" xmlns="http://www.w3.org/2000/svg">
             <circle cx="8" cy="4.2" r="3.2"/>
             <path d="M2.5 13.8C2.5 10.8 5 9.4 8 9.4C11 9.4 13.5 10.8 13.5 13.8C13.5 14.4 13 14.8 12.4 14.8H3.6C3 14.8 2.5 14.4 2.5 13.8Z"/>

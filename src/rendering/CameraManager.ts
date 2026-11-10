@@ -32,8 +32,13 @@ export class CameraManager {
   // 互動狀態追蹤
   private isLeftDragging: boolean = false;
   private isRightDragging: boolean = false;
+  private isMiddleDragging: boolean = false;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
+  private pressedKeys: Set<string> = new Set();
+
+  // 控制左鍵是否啟用平移（當建造工具啟用時，左鍵保留給建造使用）
+  public isLeftDragEnabled: boolean = true;
 
   // 地面射線檢測（實現直覺的抓地拖曳感）
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
@@ -57,9 +62,17 @@ export class CameraManager {
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
 
-      if (e.button === 0) {
-        // 左鍵：開始平移地圖
+      if (e.button === 0 && this.isLeftDragEnabled) {
+        // 左鍵：開始平移地圖（未啟用建造工具時）
         this.isLeftDragging = true;
+        this.domElement.style.cursor = 'grab';
+        const hit = this.getGroundIntersection(e.clientX, e.clientY);
+        if (hit) {
+          this.dragStartGroundPoint.copy(hit);
+        }
+      } else if (e.button === 1) {
+        // 中鍵：隨時支援平移地圖（即便建造模式中也能平移）
+        this.isMiddleDragging = true;
         this.domElement.style.cursor = 'grab';
         const hit = this.getGroundIntersection(e.clientX, e.clientY);
         if (hit) {
@@ -87,8 +100,8 @@ export class CameraManager {
           this.minPitch,
           Math.min(this.maxPitch, this.targetPitch + deltaY * rotateSpeed)
         );
-      } else if (this.isLeftDragging) {
-        // 左鍵拖曳：平移地圖
+      } else if (this.isLeftDragging || this.isMiddleDragging) {
+        // 左鍵或中鍵拖曳：平移地圖
         const currentHit = this.getGroundIntersection(e.clientX, e.clientY);
         if (currentHit && this.dragStartGroundPoint) {
           // 抓地移動量：起始抓點 - 當前照射點
@@ -132,10 +145,19 @@ export class CameraManager {
     window.addEventListener('mouseup', (e: MouseEvent) => {
       if (e.button === 0) {
         this.isLeftDragging = false;
-        this.domElement.style.cursor = 'default';
+        if (!this.isRightDragging && !this.isMiddleDragging) {
+          this.domElement.style.cursor = 'default';
+        }
+      } else if (e.button === 1) {
+        this.isMiddleDragging = false;
+        if (!this.isRightDragging && !this.isLeftDragging) {
+          this.domElement.style.cursor = 'default';
+        }
       } else if (e.button === 2) {
         this.isRightDragging = false;
-        this.domElement.style.cursor = 'default';
+        if (!this.isLeftDragging && !this.isMiddleDragging) {
+          this.domElement.style.cursor = 'default';
+        }
       }
     });
 
@@ -150,6 +172,27 @@ export class CameraManager {
         Math.min(this.maxDistance, this.targetDistance * zoomFactor)
       );
     }, { passive: false });
+
+    // 鍵盤 WASD / 方向鍵平移視角
+    window.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      this.pressedKeys.add(e.code);
+    });
+
+    window.addEventListener('keyup', (e: KeyboardEvent) => {
+      this.pressedKeys.delete(e.code);
+    });
+  }
+
+  /**
+   * 切換左鍵地圖平移功能的啟用狀態（提供給建造工具模式切換）
+   */
+  public setLeftDragEnabled(enabled: boolean): void {
+    this.isLeftDragEnabled = enabled;
+    if (!enabled) {
+      this.isLeftDragging = false;
+      this.domElement.style.cursor = 'default';
+    }
   }
 
   /**
@@ -181,9 +224,41 @@ export class CameraManager {
   }
 
   /**
-   * 每幀更新呼叫（實現絲滑平滑阻尼）
+   * 每幀更新呼叫（實現絲滑平滑阻尼與鍵盤 WASD 移動）
+   * @param deltaTime 距上一幀的秒數 (預設 0.016s)
    */
-  public update(): void {
+  public update(deltaTime: number = 0.016): void {
+    // 1. 處理 WASD / 上左下右方向鍵視角平移
+    if (this.pressedKeys.size > 0) {
+      const forward = new THREE.Vector3(
+        -Math.sin(this.targetYaw),
+        0,
+        -Math.cos(this.targetYaw)
+      ).normalize();
+
+      const right = new THREE.Vector3(
+        Math.cos(this.targetYaw),
+        0,
+        -Math.sin(this.targetYaw)
+      ).normalize();
+
+      const moveDir = new THREE.Vector3();
+      if (this.pressedKeys.has('KeyW') || this.pressedKeys.has('ArrowUp')) moveDir.add(forward);
+      if (this.pressedKeys.has('KeyS') || this.pressedKeys.has('ArrowDown')) moveDir.sub(forward);
+      if (this.pressedKeys.has('KeyA') || this.pressedKeys.has('ArrowLeft')) moveDir.sub(right);
+      if (this.pressedKeys.has('KeyD') || this.pressedKeys.has('ArrowRight')) moveDir.add(right);
+
+      if (moveDir.lengthSq() > 0) {
+        moveDir.normalize();
+        // 移動速度依當前鏡頭距離自適應（拉遠移動快，拉近更細緻）
+        const panSpeed = Math.max(25, this.targetDistance * 0.95);
+        const moveDelta = moveDir.multiplyScalar(panSpeed * deltaTime);
+
+        this.targetPosition.add(moveDelta);
+        this.target.add(moveDelta);
+      }
+    }
+
     const lerpDamp = 0.12;
 
     this.distance += (this.targetDistance - this.distance) * lerpDamp;
