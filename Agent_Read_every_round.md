@@ -1,0 +1,3 @@
+1. 每輪作業後，請寫入更新進度進入 "Agent_dev_log.md"
+2. 每輪作業後，請寫入當次更新的技術細節進入 "Agent_technique_record"，以提供日後修復以及擴充時參考
+3. 每次與用戶討論後，請將結論紀錄於 "Dissusion_withDEV.md"，以便於後續開發的參考
