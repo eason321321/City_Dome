@@ -9,6 +9,7 @@
 ## 階段進度總覽 (Progress Overview)
 
 - [x] **階段 0：專案地基與核心資料結構** `[已完成]`
+- [x] **階段 0.5：基礎地圖與 RTS 相機控制器** `[已完成]`
 - [ ] **階段 1：網格系統與路網有向圖編輯 (Grid & Road Network)**
 - [ ] **階段 2：車輛尋路與交通流模擬 (Traffic & A* Pathfinding)**
 - [ ] **階段 3：土地分區與建築動態生長 (Zoning & Building Lifecycle)**
@@ -26,6 +27,20 @@
 - [x] 完成六大領域資料結構型別定義（`Road`, `Vehicle`, `Citizen`, `Building`, `Overlay`, `Simulation`）
 - [x] 完成雙層架構容器配置（Canvas 畫布與 UI 覆蓋層）
 - [x] 建立三大規範文檔（`Dissusion_withDEV.md`, `Agent_technique_record.md`, `Agent_dev_log.md`）
+
+---
+
+## 階段 0.5：基礎地圖與 RTS 相機控制器 `[狀態: 已完成]`
+- [x] **基礎地貌與格線渲染器 (`TerrainRenderer.ts`)**：
+  - 240x240m 大地底盤與 200x200m 建設區綠地。
+  - 雙層格線系統：2m 次要細格線、10m 主要幹道亮水藍色格線。
+  - 邊界框線與 (0,0,0) 世界中心標記。
+  - 支援 PCFSoftShadowMap 柔和陰影與日光光照。
+- [x] **RTS 視角相機管理器 (`CameraManager.ts`)**：
+  - **右鍵拖曳**：水平偏航角（Yaw）與俯仰角（Pitch 10°~85° 限制，避免鑽入地下）旋轉。
+  - **左鍵拖曳**：基於射線檢測的「抓地拖曳（Ground Plane Drag）」，提供極致真實貼地手感。
+  - **滾輪縮放**：平滑指數縮放（8m ~ 180m 距離限制）。
+  - 支援每幀阻尼插值（Lerp Damping），操作手感絲滑。
 
 ---
 

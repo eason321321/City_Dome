@@ -4,72 +4,55 @@
 
 ---
 
-## [2026-11-10] 最終技術鏈與開發工具配置定案 (v0.1.2)
+## [2026-11-10] 階段 0.5：基礎地圖與 RTS 相機控制器技術實作 (v0.1.3)
 
-### 1. 完整技術鏈選型總結 (Tech Stack Blueprint)
+### 1. RTS 相機控制演算法 (`src/rendering/CameraManager.ts`)
 
-| 模組維度 | 選定技術 / 工具 | 選型依據與技術考量 |
-| :--- | :--- | :--- |
-| **構建工具** | `Vite 5.x` | 次秒級熱更新（HMR），最適合與 AI 快速反覆運算與調整參數 |
-| **程式語言** | `TypeScript 5.x` | 嚴格型別檢驗（strict: true），降低 AI 幻覺與執行期型別錯誤 |
-| **3D 渲染核心** | `Three.js` (原生) | 避免 React/R3F 的虛擬 DOM 陷阱，直通 WebGL 批次繪製 |
-| **3D 物件呈現** | **Procedural Low-Poly** | 以代碼動態生成幾何體，零檔案體積，配合 `InstancedMesh` 極致優化 |
-| **音效驅動核心** | **Web Audio API** | 瀏覽器原生硬體加速音訊，低延遲，原生支援 3D 空間定位 |
-| **音效合成演算法** | **ZzFX** | <1KB 純代碼參數化合成，免除外部 MP3/WAV 檔案依賴 |
-| **空間與空間定位** | `THREE.AudioListener` + `THREE.PositionalAudio` | 與相機視角連動，實現真實空間距離衰減與平移音場 |
-| **邏輯與模擬層** | 純 TypeScript（Decoupled） | 固定 Tick 步長，完全與渲染隔離，預留未來 Web Worker 支援 |
+#### 1.1 球面座標（Spherical Coordinates）視角定位
+相機以觀察目標錨點 $\vec{T} = (T_x, T_y, T_z)$ 為中心，依據距離 $D$、俯仰角 $\theta$（Pitch）、水平偏航角 $\phi$（Yaw）進行空間位置計算：
+$$x = T_x + D \cdot \cos(\theta) \cdot \sin(\phi)$$
+$$y = T_y + D \cdot \sin(\theta)$$
+$$z = T_z + D \cdot \cos(\theta) \cdot \cos(\phi)$$
+- **邊界保護限制**：
+  - $\theta \in [10^\circ, 85^\circ]$（避免鏡頭翻轉或穿透至地底）。
+  - $D \in [8\text{m}, 180\text{m}]$（提供微觀街景到宏觀全城的順暢切換）。
 
----
+#### 1.2 「真．抓地拖曳」射線平移演算法 (Ray-Plane Ground Drag)
+有別於傳統將螢幕像素乘上固定速度的粗糙平移，本專案採用真實物理平面交點演算法：
+1. 當用戶於螢幕點 $(X_0, Y_0)$ 按下左鍵，發射射線並與地平面 $Y = 0$（法向量 $(0, 1, 0)$）相交，求得地表錨點 $\vec{P}_{\text{start}}$。
+2. 當滑鼠移動至 $(X_1, Y_1)$，再次射線計算當前交點 $\vec{P}_{\text{current}}$。
+3. 地表平移量為：
+   $$\Delta \vec{P} = \vec{P}_{\text{start}} - \vec{P}_{\text{current}}$$
+4. 將 $\Delta \vec{P}$ 累加至目標錨點 $\vec{T}$，並更新 $\vec{P}_{\text{start}} \leftarrow \text{新交點}$。
+- **效果**：滑鼠點擊的地表座標將始終精準緊貼滑鼠游標，手感極度扎實流暢。
+- **邊界防禦**：若攝影機仰視射向天空（射線未射中地平面），自動降級切換為相機局部坐標向與前向量投射平移。
 
-### 2. 3D 物件「程式化低多邊形」技術實作細節
-
-#### 2.1 幾何生成規範（Procedural Geometry Pipeline）
-- **建築物生成策略**：
-  - 基礎構造：以 `THREE.BoxGeometry` 為基座主體。
-  - 屋頂與細節：透過 `THREE.ConeGeometry`、`THREE.CylinderGeometry` 或複合幾何，依照建築等級（Level 1~5）動態拼接。
-  - 網格合併優化：多個幾何單元組裝後，調用 `BufferGeometryUtils.mergeGeometries` 合併為單一幾何體，消除子 Mesh 產生的 Draw Call。
-- **車輛與市民生成策略**：
-  - 車輛：採用簡約雙體立方體（車身 + 駕駛艙）與圓柱車輪，統一套用至 `THREE.InstancedMesh`。
-  - 市民：採用微型膠囊體（Capsule）或簡約小體素，搭配頂點著色或材質調色板。
-- **抽象工廠設計（Geometry Factory）**：
-  - 封裝 `ProceduralBuildingFactory.create(type, level)`，回傳標準化 `THREE.BufferGeometry`，日後若替換為外部 GLTF 載入器，介面保持完全相容。
+#### 1.3 絲滑平滑阻尼 (Lerp Damping)
+在每幀渲染中應用指數阻尼衰減，避免生硬跳躍：
+$$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
+其中 $\text{dampFactor} = 0.12$，提供頂級 3A 遊戲般的平滑手感。
 
 ---
 
-### 3. 音效系統架構細節（SoundManager Specification）
+### 2. 基礎地圖地形技術細節 (`src/rendering/TerrainRenderer.ts`)
 
-#### 3.1 系統架構圖
-```text
-           [ 瀏覽器 Web Audio Context ]
-                      │
-     ┌────────────────┴────────────────┐
-     ▼                                 ▼
-[ ZzFX 音效微核心 ]             [ Three.js 空間音效系統 ]
-(UI 建造/拆除/按鈕點擊)         (環境環境音 / 路口車流 / 工廠)
-     │                                 │
-     │ 即時參數合成                    ▼
-     │                         THREE.AudioListener (綁定 Camera)
-     │                                 ▲
-     │                                 │ 距離衰減計算
-     │                                 │
-     └─────────────────────────► THREE.PositionalAudio (掛載至特定座標)
-```
+#### 2.1 雙層網格系統設計
+- **可建設核心區**：$200\text{m} \times 200\text{m}$，採用低多邊形消光森林綠（`#223326`），避免視覺疲勞。
+- **次要網格（Minor Grid）**：間隔 $2\text{m}$（單元網格，對應未來標準建築與車道基本單位）。
+- **主要網格（Major Grid）**：間隔 $10\text{m}$，亮水藍色（`#38bdf8`），作為城市街區與幹道骨架參考。
+- **邊界框線與原點**：以輕量 `LineSegments` 勾勒建設區邊緣，并在 $(0, 0, 0)$ 標記中心指示柱。
 
-#### 3.2 模組介面規劃
-- **模組路徑**：`src/audio/SoundManager.ts`
-- **核心功能清單**：
-  - `init()`：由用戶首次互動（點擊/按鍵）時喚醒解鎖 `AudioContext`（符合瀏覽器安全政策）。
-  - `playUI(soundType: 'build' | 'demolish' | 'click' | 'error' | 'tax')`：調用 ZzFX 數值產生器發出清脆反饋。
-  - `updateCameraListener(camera: THREE.Camera)`：將空間監聽器同步至相機。
-  - `playSpatial(soundType, worldPos: Vector3D)`：在指定空間點發聲。
+#### 2.2 陰影與光照調校
+- 採用 `THREE.PCFSoftShadowMap`，陽光（`DirectionalLight`）解析度設定為 $2048 \times 2048$。
+- 加入 `THREE.HemisphereLight`（天光天空藍 + 地光深灰藍），消除死黑陰影，確保建築被背光時依然層次分明。
+- 加入 `THREE.FogExp2` 景深霧氣，使遠端地平線自然融入暗色夜空。
 
 ---
 
-### 4. 開發路線圖架構規範 (DEV Roadmap Architecture, 2026-11-10 新增)
-- **路線圖結構文件**：`DEV_roadMap.md`
-- **階段劃分原則**：由低階資料結構推進至高階視覺與閉環玩法：
-  - **階段 1~2（核心交通基石）**：路網圖論 `RoadGraph` $\to$ A* 尋路與防撞跟車 `TrafficSystem`。
-  - **階段 3~4（城市動態運算）**：土地分區 RCI 生長 `BuildingSystem` $\to$ 24 小時作息時鐘 `CitizenSystem`。
-  - **階段 5~7（感官表現層）**：Procedural 幾何工廠 $\to$ GIS 多維 Shader 圖層 $\to$ Web Audio 3D 音效。
-  - **階段 8~9（經營遊戲閉環）**：經濟與稅收 HUD 面板 $\to$ 存檔與突發挑戰事件。
-- **擴充預留設計**：每個階段均維持「純邏輯模組 (`simulation/`)」與「渲染表現模組 (`rendering/`)」嚴格一對一分離，確保未來任何單一階段實作時，隨時可單獨撰寫單元測試。
+### 3. UI 純淨性與自動化實機驗證技術 (Verification & UI Minimalism)
+- **UI 純淨性指標**：
+  - `#ui-overlay` 保持完全透明無干擾，移除任何常駐教學文字與階段標籤。
+  - 嚴格遵守規範：非必要絕不自行寫入未要求之機制與提示。
+- **自動化實機啟動測試管線**：
+  - 透過原生 Node.js HTTP 伺服器掛載 `dist/`，調用本機 Chromium/Edge（`--headless=new`）。
+  - 成功驗證 DOM 樹正確掛載 `<canvas>`、Three.js 順暢初始化並輸出控制台日誌，確認 0 執行期崩潰。

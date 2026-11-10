@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { CameraManager } from './rendering/CameraManager';
+import { TerrainRenderer } from './rendering/TerrainRenderer';
 import { WorldSimulationState, SimulationSpeed, MapOverlayMode } from './types';
 
 console.log('🏗️ City Dome 城市建造模擬器初始化中...');
@@ -16,7 +18,7 @@ const initialWorldState: WorldSimulationState = {
     population: 0,
     employedCount: 0,
     unemployedRate: 0,
-    treasury: 50000, // 初始建城預算 $50,000
+    treasury: 50000,
     cashFlow: 0,
     overallHappiness: 75,
     averageTrafficCongestion: 1.0,
@@ -25,51 +27,71 @@ const initialWorldState: WorldSimulationState = {
   activeOverlayMode: MapOverlayMode.Normal,
 };
 
-// 基礎 Three.js 畫布容器綁定驗證
 const container = document.getElementById('canvas-container');
 
 if (container) {
+  // 1. 初始化場景
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1e293b); // 深色藍灰背景
+  scene.background = new THREE.Color(0x0f172a); // 質感深邃夜空/底色
+  scene.fog = new THREE.FogExp2(0x0f172a, 0.0035); // 遠端景深柔和霧氣
 
+  // 2. 初始化透視相機
   const camera = new THREE.PerspectiveCamera(
     45,
     window.innerWidth / window.innerHeight,
     0.1,
     1000
   );
-  camera.position.set(30, 40, 50);
-  camera.lookAt(0, 0, 0);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  // 3. 初始化渲染器
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: 'high-performance',
+  });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
-  // 基礎格線與打光（地基環境）
-  const gridHelper = new THREE.GridHelper(100, 50, 0x38bdf8, 0x334155);
-  scene.add(gridHelper);
+  // 4. 環境與陽光照明
+  const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x1e293b, 0.7);
+  scene.add(hemiLight);
 
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-  scene.add(ambientLight);
+  const sunLight = new THREE.DirectionalLight(0xfffbeb, 1.4);
+  sunLight.position.set(80, 120, 60);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.width = 2048;
+  sunLight.shadow.mapSize.height = 2048;
+  sunLight.shadow.camera.near = 10;
+  sunLight.shadow.camera.far = 300;
+  sunLight.shadow.camera.left = -120;
+  sunLight.shadow.camera.right = 120;
+  sunLight.shadow.camera.top = 120;
+  sunLight.shadow.camera.bottom = -120;
+  sunLight.shadow.bias = -0.0005;
+  scene.add(sunLight);
 
-  const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-  dirLight.position.set(50, 80, 30);
-  scene.add(dirLight);
+  // 5. 基礎地圖地形與網格
+  new TerrainRenderer(scene);
 
-  // 視窗自適應縮放
+  // 6. RTS 專用相機管理器（右鍵旋轉、左鍵平移、滾輪縮放）
+  const cameraManager = new CameraManager(camera, renderer.domElement);
+
+  // 7. 視窗自適應
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  // 渲染迴圈驗證
+  // 8. 主渲染循環
   function animate() {
     requestAnimationFrame(animate);
+    cameraManager.update();
     renderer.render(scene, camera);
   }
   animate();
 
-  console.log('✅ Three.js 基礎渲染地基已就緒，初始狀態：', initialWorldState);
+  console.log('✅ 階段 0.5 完成：基礎地圖與 RTS 相機控制器已啟動！初始狀態：', initialWorldState);
 }
