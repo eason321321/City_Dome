@@ -913,3 +913,688 @@
 
 
 
+
+
+---
+
+## [2026-11-11] 第 14 輪作業：低密度住宅全面換代重構（Stylized Low-Poly 自然美學、人體工學比例對齊與多幾何輪廓）
+
+### 本輪更新摘要
+- **目標**：全面替換低密度住宅模型，依據參考樣照定案之「Stylized Low-Poly 3D」溫暖微縮模型風格（Townscaper / SimCity 自然美學），重新架構所有尺寸之低密度住宅。
+- **嚴格落實要求**：
+  1. **比例與市民身高精準對齊 (Scale Harmonization)**：以市民身高（男高 $0.178\text{m}$、女高 $0.168\text{m}$）與自用轎車（高 $0.142\text{m}$、寬 $0.198\text{m}$、長 $0.369\text{m}$）為核心基準，確立 $1.0\text{ 單位} = 10\text{m}$（即 $0.1\text{ 單位} = 1.0\text{m}$）真實微縮人體工學尺度：
+     - 正門規格：寬 $0.09\text{m} \sim 0.11\text{m}$、高 $0.21\text{m} \sim 0.22\text{m}$（市民通過頭頂保有 $3.2\text{cm}$ 舒適淨空）。
+     - 單層牆身：高 $0.28\text{m} \sim 0.32\text{m}$；雙層住宅高 $0.54\text{m} \sim 0.60\text{m}$。
+     - 窗台高度：約 $0.08\text{m}$（齊市民腰部）；外圍木柵欄高 $0.085\text{m}$（胸腰部防護高度）。
+     - 私家車道：寬 $0.46\text{m} \sim 0.60\text{m}$，完美停放寬 $0.20\text{m}$ 之自用轎車。
+  2. **徹底告別單調長方體，每款住宅具備獨立幾何剪影**：
+     - `Residential_2x2` (1.0m × 1.0m)：經典美式 L 型雙斜屋頂精緻小屋，凹入式玄關前廊、立柱雨棚、紅磚煙囪與珊瑚花圃。
+     - `Residential_2x3` (1.0m × 1.5m)：北歐當代單坡斜頂住宅，大縱深悠然長型後花園、二樓暖雪松木飾板特色牆、一樓轉角全景落地窗與金屬通氣煙囪。
+     - `Residential_3x2` (1.5m × 1.0m)：暖陽地中海/西班牙莊園平房，西班牙陶土四坡歇山頂 (Terracotta Hip Roof)、雙拱柱前廊玄關 (Double-Arched Portico) 與左側意境針葉柏樹。
+     - `Residential_3x3` (1.5m × 1.5m)：雙層現代美式工藝家庭別墅，右側專屬私家車道、二樓暖雪松木主臥內縮帶護欄露台、斜坡老虎窗 (Attic Dormer) 與茂密庭蔭樹。
+     - `Residential_4x4` (2.0m × 2.0m)：包浩斯頂級現代豪華莊園別墅，附屬獨立車庫棟、寬敞聯外車道、懸挑二樓主臥 (Cantilever Volume)、全景通透玻璃幕牆與名貴雙植栽。
+  3. **豐富景觀生態**：包含地基防潮水線基座、石板迎賓小徑、瀝青/混擬土車道、修剪整齊綠籬、白木尖角柵欄、蓬鬆多面體落葉樹、階梯松柏針葉樹與點綴花球。
+  4. **DevMenu 3D 檢視器升級**：新增「🏘️ 住宅、市民與車輛 1:1 比例對照展台 (Scale Lineup)」，支援 360° 旋轉即時比對建築與市民、車輛之視覺大小。
+- **原則**：先建立高品質住宅模型確認風格；依指令本輪完成後不建立 Git 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/BuildingModelFactory.ts`：
+   - 全面重寫，實作自然材質調色盤（Ivory Stucco、Sand Stucco、Warm Cedar Wood、Dark Slate、Terracotta Clay、Dark Metal、Sky Glass 等）。
+   - 封裝專業級低多邊形幾何構造器：`createBaseLot`、`createGableRoof`、`createHipRoof`、`createShedRoof`、`createFlatParapetRoof`、`createDormer`、`createWindow`、`createPanoramicWindow`、`createFrontDoor`、`createPorchAwning`、`createPicketFence`、`createHedge`、`createDeciduousTree`、`createConiferTree`、`createBush`、`createChimney`。
+   - 實作 5 款全新高水準低密度住宅模型與元資料目錄。
+2. `src/ui/DevMenu.ts`：
+   - 模型檢視器下拉選單加入各款新住宅與「住宅、市民與車輛 1:1 比例展台」。
+   - 精確顯示格數與米數佔地規格。
+3. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：記錄本輪開發紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 路線圖規劃備忘：市民停車由「在途預約」演進至「抵達後動態尋位與決策機制」
+- **開發者需求登記**：
+  - 現階段市民遷入之車位預約機制為前期確保遷入順利穩定之過渡機制。
+  - 後續版本更新規劃：市民車輛將於抵達目的地附近時才開始動態尋找車位；若找不到車位則觸發替代決策（如繞行街區巡弋、擴大範圍尋找等，具體決策後續討論定案）。
+  - 已於 [`DEV_roadMap.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\DEV_roadMap.md) 階段 4 開發細節區與 [`Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\Dissusion_withDEV.md) 完成登錄。
+
+---
+
+## [2026-11-11] 第 17 輪作業：遊戲基本速度調慢與路口動態行車導向標線及轉彎引導線實作
+
+### 本輪更新摘要
+- **目標**：
+  1. 稍微放慢遊戲的基本速度，使車流巡航、號誌停等與市民活動更顯舒適優雅。
+  2. 依據使用者上傳圖例，於路口處精準根據道路允許行駛方向畫製車道導向箭頭標線（直行、左轉、右轉、直行兼左轉、直行兼右轉、左右轉、三向全通）與路口內部圓弧轉彎引導虛線。
+- **實作內容**：
+  1. **遊戲基本速度放慢**：
+     - `TimeManager.ts`：預設模擬倍率調為 `0.75x`（`timeScale = 0.75`），提供平滑舒緩的遊戲節奏。
+     - `VehicleManager.ts`：自用車市區巡航速度由 $9.0\text{ m/s}$ 調降為 $6.5\text{ m/s}$，減速煞車加速度微調，行車與轉彎動態更加自然。
+  2. **路面標線與引導線工廠 (`RoadMarkingFactory.ts`)**：
+     - 採用高解析 Canvas 向量繪製純白抗鋸齒標線紋理（7 種箭頭型態，完全重現參考圖之俐落箭桿與鋒銳三角箭羽）。
+     - 依進口幾何自動映射：北進向南、南進向北、東進向西、西進向東，動態計算該進口允許之直行、左轉、右轉能力並即時匹配專屬箭頭。
+     - 繪製路口內部圓弧轉彎引導線（`TurningGuideDashes`）：沿著轉彎貝茲曲線取樣生成微型白色引導虛線段，高度設置於 $y = 0.038\text{m}$，絕無 Z-fighting 破面。
+     - 實作 `createShowcase()` 3D 展台，在 DevMenu 模型檢視器中可 360° 旋轉檢視全部車道標線與轉彎引導線。
+  3. **路網系統無縫整合 (`RoadNetwork.ts`)**：
+     - `RoadTile` 新增 `markingsGroup`，道路鋪設、相交擴建或拆除時隨拓撲自動即時更新，無死角動態對齊。
+- **原則**：維持工作區修改狀態，不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/simulation/TimeManager.ts`：`timeScale` 預設為 `0.75`。
+2. `src/simulation/VehicleManager.ts`：市區車速與外部公路車速平滑下修。
+3. `src/rendering/RoadMarkingFactory.ts`：新增路面標線與轉彎引導虛線工廠。
+4. `src/systems/RoadNetwork.ts`：整合 `markingsGroup` 與 `updateMarkings` 動態生成迴圈。
+5. `src/ui/DevMenu.ts`：新增「🛣️ 路口行車導向標線與轉彎引導線展台」3D 檢視項目。
+6. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：更新紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 16 輪作業：市民就近路邊停車入住、停車即時計增人口、市民個資生成、依序下車與步入家門走路動畫實作
+
+### 本輪更新摘要
+- **目標**：依使用者要求，重構市民入住機制：
+  1. 改為「停車後下車步入房內」：抵達市民車輛會智慧搜尋離家最近之合法路邊停車位（Curbside Parking Spot）並駛入停妥。
+  2. 車輛成功停車時，立即計算全市人口數與房內人數增加。
+  3. 車輛停車成功後，動態生成車內所有市民之基本個資（姓名、性別、年齡），並記錄於建築物居民資料庫。
+  4. 若車內有多名市民，實作依序下車機制（非同時下車，交錯延遲時間下車）。
+  5. 下車時依據市民基本資料之性別決定生成之 3D 模型外觀（男性/女性）。
+  6. 市民下車經人行道步入房內時，全程驅動逼真人體工學走路動畫。
+  7. 建築物懸停資訊卡（Tooltip）與 DevMenu 房屋清單支援即時顯示入住市民名冊（姓名、性別、年齡）。
+- **原則**：依使用者指令，本更動完成後不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/simulation/VehicleManager.ts`：
+   - 擴充 `ActiveVehicle` 介面，新增 `keepMeshOnArrive?: boolean` 與帶參之 `onArrived?: (vehicle: ActiveVehicle) => void`。
+   - `spawnMovingInVehicle` 支援保留車輛 3D 模型（交接給停車管理器永駐路邊，不銷毀消失）。
+2. `src/simulation/ParkingManager.ts`：
+   - 實作在途車輛停車位預約機制（`reserveSpot`、`unreserveSpot`、`isSpotOccupied`），防止多輛遷入車輛爭搶同一個車位。
+   - 實作 `findClosestAvailableSpot(homePos, preferredTileKey)`：搜尋直線/盡頭合法路段、優先考慮門前路段與臨房側路緣，回傳最近合法車位。
+   - 實作 `parkExistingCarMesh(mesh, spot, colorHex)`：將抵達車輛模型註冊為路邊停放車輛。
+3. `src/systems/BuildingManager.ts`：
+   - 新增 `CitizenProfile`（id、姓名、性別、年齡）與 `MovingInPedestrian`（下車延遲、航點動線、步速、步態計時器）介面。
+   - 實作 `generateCitizenProfiles`：依家庭/合居戶產生逼真台灣常見中文姓名、性別與年齡。
+   - 重構 `dispatchCitizenVehicle`：結合停車位導航、車道路緣駛入過渡點，停車後即刻 `building.currentOccupants += arrivingCount`（人口即時生效）。
+   - 實作依序下車與走路動畫佇列：每隔 1.1 秒依序下車，依性別生成 3D 模型，沿人行道經大門步入玄關，步態即時計算與轉向，進屋後優雅淡出。
+   - 更新 `updateTooltipContent`：即時條列所有入住居民之圖標、姓名、性別與年齡。
+4. `src/main.ts`：
+   - 連結 `buildingManager.setParkingManager(parkingManager)`。
+5. `src/ui/DevMenu.ts`：
+   - 房屋管理分頁之房屋列表即時列出居民名冊（例：`👨陳大明(32歲)、👩林佳玲(29歲)`）。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 路線圖規劃備忘：市民停車由「在途預約」演進至「抵達後動態尋位與決策機制」
+- **開發者需求登記**：
+  - 現階段市民遷入之車位預約機制為前期確保遷入順利穩定之過渡機制。
+  - 後續版本更新規劃：市民車輛將於抵達目的地附近時才開始動態尋找車位；若找不到車位則觸發替代決策（如繞行街區巡弋、擴大範圍尋找等，具體決策後續討論定案）。
+  - 已於 [`DEV_roadMap.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\DEV_roadMap.md) 階段 4 開發細節區與 [`Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\Dissusion_withDEV.md) 完成登錄。
+
+---
+
+## [2026-11-11] 第 17 輪作業：遊戲基本速度調慢與路口動態行車導向標線及轉彎引導線實作
+
+### 本輪更新摘要
+- **目標**：
+  1. 稍微放慢遊戲的基本速度，使車流巡航、號誌停等與市民活動更顯舒適優雅。
+  2. 依據使用者上傳圖例，於路口處精準根據道路允許行駛方向畫製車道導向箭頭標線（直行、左轉、右轉、直行兼左轉、直行兼右轉、左右轉、三向全通）與路口內部圓弧轉彎引導虛線。
+- **實作內容**：
+  1. **遊戲基本速度放慢**：
+     - `TimeManager.ts`：預設模擬倍率調為 `0.75x`（`timeScale = 0.75`），提供平滑舒緩的遊戲節奏。
+     - `VehicleManager.ts`：自用車市區巡航速度由 $9.0\text{ m/s}$ 調降為 $6.5\text{ m/s}$，減速煞車加速度微調，行車與轉彎動態更加自然。
+  2. **路面標線與引導線工廠 (`RoadMarkingFactory.ts`)**：
+     - 採用高解析 Canvas 向量繪製純白抗鋸齒標線紋理（7 種箭頭型態，完全重現參考圖之俐落箭桿與鋒銳三角箭羽）。
+     - 依進口幾何自動映射：北進向南、南進向北、東進向西、西進向東，動態計算該進口允許之直行、左轉、右轉能力並即時匹配專屬箭頭。
+     - 繪製路口內部圓弧轉彎引導線（`TurningGuideDashes`）：沿著轉彎貝茲曲線取樣生成微型白色引導虛線段，高度設置於 $y = 0.038\text{m}$，絕無 Z-fighting 破面。
+     - 實作 `createShowcase()` 3D 展台，在 DevMenu 模型檢視器中可 360° 旋轉檢視全部車道標線與轉彎引導線。
+  3. **路網系統無縫整合 (`RoadNetwork.ts`)**：
+     - `RoadTile` 新增 `markingsGroup`，道路鋪設、相交擴建或拆除時隨拓撲自動即時更新，無死角動態對齊。
+- **原則**：維持工作區修改狀態，不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/simulation/TimeManager.ts`：`timeScale` 預設為 `0.75`。
+2. `src/simulation/VehicleManager.ts`：市區車速與外部公路車速平滑下修。
+3. `src/rendering/RoadMarkingFactory.ts`：新增路面標線與轉彎引導虛線工廠。
+4. `src/systems/RoadNetwork.ts`：整合 `markingsGroup` 與 `updateMarkings` 動態生成迴圈。
+5. `src/ui/DevMenu.ts`：新增「🛣️ 路口行車導向標線與轉彎引導線展台」3D 檢視項目。
+6. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：更新紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+
+---
+
+## [2026-11-11] 第 15 輪作業：男女通用市民人體工學走路動畫設計與開發者工具檢視整合
+
+### 本輪更新摘要
+- **目標**：根據市民 3D 模型設計人體工學走路動畫，男女通用同一套生物力學步態演算法，並於開發者工具（DevMenu）提供即時 3D 檢視與控制。
+- **實作內容**：
+  1. **骨架關節層級重構 (Hierarchical Rigging)**：
+     - 將市民雙腿、雙臂與軀幹拆分為獨立可動關節群組：`leftLeg`（左髖支點 $y = 0.088\text{m}$）、`rightLeg`（右髖支點）、`leftArm`（左肩支點 $y = 0.138\text{m}$）、`rightArm`（右肩支點）、`torsoGroup`（軀幹/骨盆/頭部群組）。
+     - 男女模型均封裝相同 `CitizenLimbNodes` 結構並綁定於 `group.userData.limbs`。
+     - 女性洋裝/短裙隨軀幹自然律動，雙腿於裙下交替擺動；右手臂手提包隨擺臂同步律動。
+  2. **生物力學走路動畫演算法 (Bipedal Walk Cycle)**：
+     - **雙腿交替擺動**：正弦波動 $\theta_{\text{leg}} = \pm \sin(\phi) \times 24^\circ$（交替對稱跨步）。
+     - **雙臂反相擺動**：$\theta_{\text{arm}} = \mp \sin(\phi) \times 20^\circ$，手臂向外微傾 $2^\circ$ 防穿透大腿。
+     - **骨盆/軀幹垂直顛簸**：雙倍步頻垂直起伏 $y_{\text{bob}} = |\sin(\phi)| \times 3.5\text{mm}$。
+     - **重心微偏轉 (Yaw & Roll)**：軀幹微幅自轉 $\pm 2.0^\circ$ 與側傾 $\pm 0.9^\circ$。
+  3. **DevMenu 開發者工具檢視整合**：
+     - 3D 模型展台新增「🚶 市民走路步態雙人展台 (Walking Animation Showcase)」，男女市民並肩於石板人行道上行走。
+     - 3D 模型庫所有市民模型（基礎男、優雅女、墨鏡男、包包女、人車對照組、住宅對照組）皆支援原地走路動畫。
+     - 新增「🚶 走路動畫: 開啟中 / 暫停」即時切換按鈕，支援暫停定格觀察任意角度姿態。
+     - 市民分頁新增「🚶 市民全體走路: 開啟 / 暫停」控制，地圖與人行道上散布之市民可集體行走。
+
+### 本輪異動檔案清單
+1. `src/rendering/CitizenModelFactory.ts`：重構關節層級，實作 `animateCitizenWalk`、`resetCitizenPose`、`animateAllCitizens`、`resetAllCitizens` 與 `createWalkShowcase`。
+2. `src/ui/DevMenu.ts`：整合走路動畫更新迴圈、展示台切換選項與控制按鈕。
+3. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：登錄本輪開發紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 路線圖規劃備忘：市民停車由「在途預約」演進至「抵達後動態尋位與決策機制」
+- **開發者需求登記**：
+  - 現階段市民遷入之車位預約機制為前期確保遷入順利穩定之過渡機制。
+  - 後續版本更新規劃：市民車輛將於抵達目的地附近時才開始動態尋找車位；若找不到車位則觸發替代決策（如繞行街區巡弋、擴大範圍尋找等，具體決策後續討論定案）。
+  - 已於 [`DEV_roadMap.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\DEV_roadMap.md) 階段 4 開發細節區與 [`Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\Dissusion_withDEV.md) 完成登錄。
+
+---
+
+## [2026-11-11] 第 17 輪作業：遊戲基本速度調慢與路口動態行車導向標線及轉彎引導線實作
+
+### 本輪更新摘要
+- **目標**：
+  1. 稍微放慢遊戲的基本速度，使車流巡航、號誌停等與市民活動更顯舒適優雅。
+  2. 依據使用者上傳圖例，於路口處精準根據道路允許行駛方向畫製車道導向箭頭標線（直行、左轉、右轉、直行兼左轉、直行兼右轉、左右轉、三向全通）與路口內部圓弧轉彎引導虛線。
+- **實作內容**：
+  1. **遊戲基本速度放慢**：
+     - `TimeManager.ts`：預設模擬倍率調為 `0.75x`（`timeScale = 0.75`），提供平滑舒緩的遊戲節奏。
+     - `VehicleManager.ts`：自用車市區巡航速度由 $9.0\text{ m/s}$ 調降為 $6.5\text{ m/s}$，減速煞車加速度微調，行車與轉彎動態更加自然。
+  2. **路面標線與引導線工廠 (`RoadMarkingFactory.ts`)**：
+     - 採用高解析 Canvas 向量繪製純白抗鋸齒標線紋理（7 種箭頭型態，完全重現參考圖之俐落箭桿與鋒銳三角箭羽）。
+     - 依進口幾何自動映射：北進向南、南進向北、東進向西、西進向東，動態計算該進口允許之直行、左轉、右轉能力並即時匹配專屬箭頭。
+     - 繪製路口內部圓弧轉彎引導線（`TurningGuideDashes`）：沿著轉彎貝茲曲線取樣生成微型白色引導虛線段，高度設置於 $y = 0.038\text{m}$，絕無 Z-fighting 破面。
+     - 實作 `createShowcase()` 3D 展台，在 DevMenu 模型檢視器中可 360° 旋轉檢視全部車道標線與轉彎引導線。
+  3. **路網系統無縫整合 (`RoadNetwork.ts`)**：
+     - `RoadTile` 新增 `markingsGroup`，道路鋪設、相交擴建或拆除時隨拓撲自動即時更新，無死角動態對齊。
+- **原則**：維持工作區修改狀態，不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/simulation/TimeManager.ts`：`timeScale` 預設為 `0.75`。
+2. `src/simulation/VehicleManager.ts`：市區車速與外部公路車速平滑下修。
+3. `src/rendering/RoadMarkingFactory.ts`：新增路面標線與轉彎引導虛線工廠。
+4. `src/systems/RoadNetwork.ts`：整合 `markingsGroup` 與 `updateMarkings` 動態生成迴圈。
+5. `src/ui/DevMenu.ts`：新增「🛣️ 路口行車導向標線與轉彎引導線展台」3D 檢視項目。
+6. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：更新紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 16 輪作業：市民就近路邊停車入住、停車即時計增人口、市民個資生成、依序下車與步入家門走路動畫實作
+
+### 本輪更新摘要
+- **目標**：依使用者要求，重構市民入住機制：
+  1. 改為「停車後下車步入房內」：抵達市民車輛會智慧搜尋離家最近之合法路邊停車位（Curbside Parking Spot）並駛入停妥。
+  2. 車輛成功停車時，立即計算全市人口數與房內人數增加。
+  3. 車輛停車成功後，動態生成車內所有市民之基本個資（姓名、性別、年齡），並記錄於建築物居民資料庫。
+  4. 若車內有多名市民，實作依序下車機制（非同時下車，交錯延遲時間下車）。
+  5. 下車時依據市民基本資料之性別決定生成之 3D 模型外觀（男性/女性）。
+  6. 市民下車經人行道步入房內時，全程驅動逼真人體工學走路動畫。
+  7. 建築物懸停資訊卡（Tooltip）與 DevMenu 房屋清單支援即時顯示入住市民名冊（姓名、性別、年齡）。
+- **原則**：依使用者指令，本更動完成後不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/simulation/VehicleManager.ts`：
+   - 擴充 `ActiveVehicle` 介面，新增 `keepMeshOnArrive?: boolean` 與帶參之 `onArrived?: (vehicle: ActiveVehicle) => void`。
+   - `spawnMovingInVehicle` 支援保留車輛 3D 模型（交接給停車管理器永駐路邊，不銷毀消失）。
+2. `src/simulation/ParkingManager.ts`：
+   - 實作在途車輛停車位預約機制（`reserveSpot`、`unreserveSpot`、`isSpotOccupied`），防止多輛遷入車輛爭搶同一個車位。
+   - 實作 `findClosestAvailableSpot(homePos, preferredTileKey)`：搜尋直線/盡頭合法路段、優先考慮門前路段與臨房側路緣，回傳最近合法車位。
+   - 實作 `parkExistingCarMesh(mesh, spot, colorHex)`：將抵達車輛模型註冊為路邊停放車輛。
+3. `src/systems/BuildingManager.ts`：
+   - 新增 `CitizenProfile`（id、姓名、性別、年齡）與 `MovingInPedestrian`（下車延遲、航點動線、步速、步態計時器）介面。
+   - 實作 `generateCitizenProfiles`：依家庭/合居戶產生逼真台灣常見中文姓名、性別與年齡。
+   - 重構 `dispatchCitizenVehicle`：結合停車位導航、車道路緣駛入過渡點，停車後即刻 `building.currentOccupants += arrivingCount`（人口即時生效）。
+   - 實作依序下車與走路動畫佇列：每隔 1.1 秒依序下車，依性別生成 3D 模型，沿人行道經大門步入玄關，步態即時計算與轉向，進屋後優雅淡出。
+   - 更新 `updateTooltipContent`：即時條列所有入住居民之圖標、姓名、性別與年齡。
+4. `src/main.ts`：
+   - 連結 `buildingManager.setParkingManager(parkingManager)`。
+5. `src/ui/DevMenu.ts`：
+   - 房屋管理分頁之房屋列表即時列出居民名冊（例：`👨陳大明(32歲)、👩林佳玲(29歲)`）。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 路線圖規劃備忘：市民停車由「在途預約」演進至「抵達後動態尋位與決策機制」
+- **開發者需求登記**：
+  - 現階段市民遷入之車位預約機制為前期確保遷入順利穩定之過渡機制。
+  - 後續版本更新規劃：市民車輛將於抵達目的地附近時才開始動態尋找車位；若找不到車位則觸發替代決策（如繞行街區巡弋、擴大範圍尋找等，具體決策後續討論定案）。
+  - 已於 [`DEV_roadMap.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\DEV_roadMap.md) 階段 4 開發細節區與 [`Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\MarkDown\Dissusion_withDEV.md) 完成登錄。
+
+---
+
+## [2026-11-11] 第 17 輪作業：遊戲基本速度調慢與路口動態行車導向標線及轉彎引導線實作
+
+### 本輪更新摘要
+- **目標**：
+  1. 稍微放慢遊戲的基本速度，使車流巡航、號誌停等與市民活動更顯舒適優雅。
+  2. 依據使用者上傳圖例，於路口處精準根據道路允許行駛方向畫製車道導向箭頭標線（直行、左轉、右轉、直行兼左轉、直行兼右轉、左右轉、三向全通）與路口內部圓弧轉彎引導虛線。
+- **實作內容**：
+  1. **遊戲基本速度放慢**：
+     - `TimeManager.ts`：預設模擬倍率調為 `0.75x`（`timeScale = 0.75`），提供平滑舒緩的遊戲節奏。
+     - `VehicleManager.ts`：自用車市區巡航速度由 $9.0\text{ m/s}$ 調降為 $6.5\text{ m/s}$，減速煞車加速度微調，行車與轉彎動態更加自然。
+  2. **路面標線與引導線工廠 (`RoadMarkingFactory.ts`)**：
+     - 採用高解析 Canvas 向量繪製純白抗鋸齒標線紋理（7 種箭頭型態，完全重現參考圖之俐落箭桿與鋒銳三角箭羽）。
+     - 依進口幾何自動映射：北進向南、南進向北、東進向西、西進向東，動態計算該進口允許之直行、左轉、右轉能力並即時匹配專屬箭頭。
+     - 繪製路口內部圓弧轉彎引導線（`TurningGuideDashes`）：沿著轉彎貝茲曲線取樣生成微型白色引導虛線段，高度設置於 $y = 0.038\text{m}$，絕無 Z-fighting 破面。
+     - 實作 `createShowcase()` 3D 展台，在 DevMenu 模型檢視器中可 360° 旋轉檢視全部車道標線與轉彎引導線。
+  3. **路網系統無縫整合 (`RoadNetwork.ts`)**：
+     - `RoadTile` 新增 `markingsGroup`，道路鋪設、相交擴建或拆除時隨拓撲自動即時更新，無死角動態對齊。
+- **原則**：維持工作區修改狀態，不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/simulation/TimeManager.ts`：`timeScale` 預設為 `0.75`。
+2. `src/simulation/VehicleManager.ts`：市區車速與外部公路車速平滑下修。
+3. `src/rendering/RoadMarkingFactory.ts`：新增路面標線與轉彎引導虛線工廠。
+4. `src/systems/RoadNetwork.ts`：整合 `markingsGroup` 與 `updateMarkings` 動態生成迴圈。
+5. `src/ui/DevMenu.ts`：新增「🛣️ 路口行車導向標線與轉彎引導線展台」3D 檢視項目。
+6. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：更新紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。
+
+---
+
+## [2026-11-11] 第 18 輪作業：修復路口與接近車道路面導向箭頭標線可見度、轉彎引導虛線，以及貫徹以虛擬遊戲時間為唯一核心之速度與進度邏輯
+
+### 本輪更新摘要
+- **問題診斷與修復目標**：
+  1. **路口標線未顯示與雜亂線段修復**：
+     - **根本原因**：
+       1. 道路幾何體頂面位於 $y = 0.055\text{m}$，先前標線位於 $y = 0.038\text{m}$ 導致被路面完全遮蔽。
+       2. 先前實作在路口內部為每條轉彎航線取樣生成虛線（`TurningGuideDashes`），導致 2 線道小型路口中間充滿 20 餘條散亂如牙籤的白色碎虛線（即使用者指出的「中間有很多奇怪的線」），且路口中心亦被錯誤放置多餘箭頭。
+     - **全面重構方案**：
+       - **徹底清除路口中心雜亂線段**：路口格位（`FourWay`、`ThreeWay`、`Corner`）內部保持 100% 純淨平整瀝青，不再生成任何內部虛線或中心標線，還原真實乾淨路面。
+       - **箭頭僅繪製於「進入路口前之接近直道（Approach Lanes）」**：車輛進入路口前約 $0.55\text{m}$ 處，於前進車道中央精準繪製 1 枚導向箭頭，依前方路口可轉向之方向動態匹配（直行、左轉、右轉、直兼左、直兼右、左右轉、三向全通）。
+       - **箭頭尺寸與繪製優化**：尺寸微調為寬 0.22m、長 0.36m（精準適配 0.78m 單向車道），高度 $y = 0.0565\text{m}$（浮於路面上方 1.5mm），箭頭形體全面重構為俐落、剛勁、高對比的現代標線幾何，徹底杜絕細長拖尾與雜亂線段。
+  2. **遊戲模擬速度與虛擬時間唯一真理原則貫徹**：
+     - 使用者嚴正要求：「相同時速的車輛，在遊戲模擬速度越快時，車輛移動越快，但在遊戲內移動距離與遊戲內時間必須成固定比例；遊戲內時間才是唯一核心，現實時間的秒數無意義」。
+     - **數學本質梳理與全面審查**：
+       - 遊戲虛擬時間累積：$\Delta t_{\text{virtual}} = \text{simDelta} \times 360$ 虛擬秒（即 10 模擬秒 = 1 虛擬小時）。
+       - 車輛行駛位移：$\Delta x = v \times \text{simDelta}$。
+       - 市民步行位移：$\Delta x_{\text{walk}} = v_{\text{walk}} \times \text{simDelta}$。
+       - 房屋建造進度：$\Delta \text{prog} = \frac{\text{simDelta}}{\text{duration}}$。
+       - 施工吊臂與呼吸燈：$\Delta t_{\text{crane}} = \text{simDelta}$。
+       - 交通號誌倒數：$\Delta t_{\text{signal}} = \text{simDelta}$。
+       - **嚴格驗證**：在任意時間倍率下（不論 0.5x、0.75x、1.0x、2.0x、3.0x），物體在 1 虛擬小時內之位移皆為 $10 \times v$（完全守恆不變）！
+     - **新增倍速調控支援**：
+       - `TimeManager` 擴充 `TimeScaleChangeListener`、`onTimeScaleChange` 與虛擬時分換算輔助函式。
+       - `BottomStatusBar` 於暫停鍵旁新增模擬速度切換按鈕 `[0.75x / 1.0x / 2.0x / 3.0x]`，並支援鍵盤 `1`、`2`、`3` 數字鍵無縫切換。
+       - `DevMenu` 交通分頁新增「⏱️ 遊戲模擬速度倍率控制」面板，提供即時狀態監控與按鈕。
+       - `BuildingManager` 建築資訊懸停卡工期顯示改為「遊戲分鐘/小時」，徹底落實虛擬時間核心原則。
+       - `main.ts` 主迴圈加入單幀最大步長限制（`clampedDelta = Math.min(delta, 0.1)`），防止切換分頁造成物理跳躍。
+- **原則**：工作區維持修改狀態，依使用者指示不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. `src/rendering/RoadMarkingFactory.ts`：標線高度升至 0.0565m，512x512 向量超採樣與 Group 航向角封裝。
+2. `src/systems/RoadNetwork.ts`：拓撲半徑擴大至 2 格，路口進口、轉彎弧線與接近直道箭頭全動態化。
+3. `src/simulation/TimeManager.ts`：倍速監聽、虛擬時間換算支援。
+4. `src/ui/BottomStatusBar.ts`：速度切換按鈕與鍵盤 1/2/3 切換。
+5. `src/ui/DevMenu.ts`：交通分頁速度控制面板。
+6. `src/systems/BuildingManager.ts`：懸停卡工期改以遊戲虛擬時間顯示。
+7. `src/main.ts`：單幀最大步長限制，連結 `devMenu.setTimeManager`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
+- **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
+- **Git 狀態**：依使用者要求，本更動完成後不建立 GIT 版本。

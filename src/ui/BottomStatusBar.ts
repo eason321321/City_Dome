@@ -21,6 +21,7 @@ export class BottomStatusBar {
 
   // DOM 節點快取
   private playPauseBtn!: HTMLButtonElement;
+  private speedToggleBtn!: HTMLButtonElement;
   private timeClockSpan!: HTMLSpanElement;
   private timeDateSpan!: HTMLSpanElement;
   private moneySpan!: HTMLSpanElement;
@@ -143,6 +144,33 @@ export class BottomStatusBar {
         display: block;
       }
 
+      .bottom-status-bar .speed-toggle-btn {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        padding: 0 6px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: #38bdf8;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        font-family: inherit;
+        transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+      }
+
+      .bottom-status-bar .speed-toggle-btn:hover {
+        background: rgba(56, 189, 248, 0.2);
+        border-color: #38bdf8;
+      }
+
+      .bottom-status-bar .speed-toggle-btn:active {
+        transform: scale(0.92);
+      }
+
       .bottom-status-bar .time-display {
         display: flex;
         align-items: baseline;
@@ -215,10 +243,13 @@ export class BottomStatusBar {
     const { clockStr, dateStr } = this.formatTime(this.timeManager.getTime());
 
     this.container.innerHTML = `
-      <!-- 最左邊：開始/暫停按鈕與虛擬時間 -->
+      <!-- 最左邊：開始/暫停按鈕、模擬速度切換與虛擬時間 -->
       <div class="status-segment time-segment">
-        <button class="play-pause-btn">
+        <button class="play-pause-btn" title="開始 / 暫停 (空白鍵)">
           ${this.getPlayPauseIconHtml(isPaused)}
+        </button>
+        <button class="speed-toggle-btn" title="切換模擬速度 (0.75x / 1x / 2x / 3x)">
+          ${this.timeManager.getTimeScale()}x
         </button>
         <div class="time-display">
           <span class="time-clock">${clockStr}</span>
@@ -253,6 +284,7 @@ export class BottomStatusBar {
 
     // 取得節點引用
     this.playPauseBtn = this.container.querySelector('.play-pause-btn') as HTMLButtonElement;
+    this.speedToggleBtn = this.container.querySelector('.speed-toggle-btn') as HTMLButtonElement;
     this.timeClockSpan = this.container.querySelector('.time-clock') as HTMLSpanElement;
     this.timeDateSpan = this.container.querySelector('.time-date') as HTMLSpanElement;
     this.moneySpan = this.container.querySelector('.money-value') as HTMLSpanElement;
@@ -273,11 +305,27 @@ export class BottomStatusBar {
       this.timeManager.togglePause();
     });
 
-    // 鍵盤空白鍵快速切換開始 / 暫停
+    // 模擬速度切換按鈕點擊 (循環: 0.75x -> 1.0x -> 2.0x -> 3.0x -> 0.75x)
+    const speeds = [0.75, 1.0, 2.0, 3.0];
+    this.speedToggleBtn.addEventListener('click', () => {
+      const cur = this.timeManager.getTimeScale();
+      const nextIdx = (speeds.findIndex((s) => Math.abs(s - cur) < 0.05) + 1) % speeds.length;
+      this.timeManager.setTimeScale(speeds[nextIdx]);
+    });
+
+    // 鍵盤空白鍵快速切換開始 / 暫停，1/2/3 鍵切換對應倍速
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.code === 'Space') {
         e.preventDefault();
         this.timeManager.togglePause();
+      } else if (e.key === '1') {
+        this.timeManager.setTimeScale(1.0);
+      } else if (e.key === '2') {
+        this.timeManager.setTimeScale(2.0);
+      } else if (e.key === '3') {
+        this.timeManager.setTimeScale(3.0);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -300,10 +348,18 @@ export class BottomStatusBar {
       }
     });
 
+    // 訂閱速度變更
+    const unsubSpeed = this.timeManager.onTimeScaleChange((scale) => {
+      if (this.speedToggleBtn) {
+        this.speedToggleBtn.textContent = `${scale}x`;
+      }
+    });
+
     this.unsubs.push(
       () => window.removeEventListener('keydown', handleKeyDown),
       unsubTime,
-      unsubPause
+      unsubPause,
+      unsubSpeed
     );
   }
 

@@ -16,7 +16,8 @@ export interface ActiveVehicle {
   state: 'Cruising' | 'WaitingLight' | 'Arrived';
   arrivedTimer?: number;
   disappearImmediately?: boolean; // 抵達終點後是否立即消失（市民到家）
-  onArrived?: () => void;         // 抵達終點之業務回調 (例如房屋入住人數生效)
+  keepMeshOnArrive?: boolean;     // 抵達終點後保留車輛 Mesh (由路邊停車管理器接管為停車實體)
+  onArrived?: (vehicle: ActiveVehicle) => void; // 抵達終點之業務回調 (傳入自身實體)
 }
 
 /**
@@ -81,12 +82,13 @@ export class VehicleManager {
 
   /**
    * 生成一輛自外部城市遷入住宅的市民車輛
-   * 行駛至家門前自動消失，並呼叫入住回調
+   * 行駛至家門前或最近停車位停車，並呼叫入住回調
    */
   public spawnMovingInVehicle(
     route: PathResult,
     colorHex?: number,
-    onArrived?: () => void
+    onArrived?: (vehicle: ActiveVehicle) => void,
+    keepMeshOnArrive: boolean = false
   ): ActiveVehicle | null {
     const rwps = route.routeWaypoints;
     if (!route || !rwps || rwps.length < 2) {
@@ -111,11 +113,12 @@ export class VehicleManager {
       currentWaypointIndex: 1,
       currentPosition: startPos,
       speed: 0,
-      targetSpeed: 9.0, // 舒適巡航速
-      acceleration: 5.0,
-      deceleration: 7.5,
+      targetSpeed: 6.5, // 舒適巡航速 (適度放慢提供流暢優雅的行車與轉彎觀察感)
+      acceleration: 4.2,
+      deceleration: 6.5,
       state: 'Cruising',
-      disappearImmediately: true,
+      disappearImmediately: !keepMeshOnArrive,
+      keepMeshOnArrive,
       onArrived,
     };
 
@@ -188,9 +191,18 @@ export class VehicleManager {
       const v = this.vehicles[i];
 
       if (v.state === 'Arrived') {
+        if (v.keepMeshOnArrive) {
+          if (v.onArrived) {
+            v.onArrived(v);
+            v.onArrived = undefined;
+          }
+          this.vehicles.splice(i, 1);
+          continue;
+        }
+
         if (v.disappearImmediately) {
           if (v.onArrived) {
-            v.onArrived();
+            v.onArrived(v);
             v.onArrived = undefined;
           }
           this.scene.remove(v.mesh);
@@ -211,9 +223,18 @@ export class VehicleManager {
       if (v.currentWaypointIndex >= rwps.length) {
         v.state = 'Arrived';
         v.speed = 0;
+        if (v.keepMeshOnArrive) {
+          if (v.onArrived) {
+            v.onArrived(v);
+            v.onArrived = undefined;
+          }
+          this.vehicles.splice(i, 1);
+          continue;
+        }
+
         if (v.disappearImmediately) {
           if (v.onArrived) {
-            v.onArrived();
+            v.onArrived(v);
             v.onArrived = undefined;
           }
           this.scene.remove(v.mesh);

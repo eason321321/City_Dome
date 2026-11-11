@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoadTextureFactory } from '../rendering/RoadTextureFactory';
 import { TrafficLightRenderer, TrafficSignalState } from '../rendering/TrafficLightRenderer';
+import { RoadMarkingFactory } from '../rendering/RoadMarkingFactory';
 
 export type RoadTileType = 'Straight' | 'Corner' | 'ThreeWay' | 'FourWay' | 'DeadEnd';
 
@@ -41,6 +42,7 @@ export interface RoadTile {
   rotationY: number;
   mesh: THREE.Mesh;
   sidewalkGroup: THREE.Group;      // 兩側立體高架人行道網格群組
+  markingsGroup: THREE.Group;      // 路口行車導向標線與轉彎引導線群組
   connectedNeighbors: string[];    // 相鄰相通的格位 key
   lanes: DirectedLane[];           // 本格位內部承載的車道
 }
@@ -108,6 +110,9 @@ export class RoadNetwork {
         const sidewalkGroup = new THREE.Group();
         this.scene.add(sidewalkGroup);
 
+        const markingsGroup = new THREE.Group();
+        this.scene.add(markingsGroup);
+
         this.tiles.set(key, {
           key,
           gx,
@@ -117,6 +122,7 @@ export class RoadNetwork {
           rotationY: mesh.rotation.y,
           mesh,
           sidewalkGroup,
+          markingsGroup,
           connectedNeighbors: [],
           lanes: [],
         });
@@ -128,6 +134,9 @@ export class RoadNetwork {
       this.refreshTileClassification(tile);
     }
     this.rebuildLaneGraph();
+    for (const tile of this.tiles.values()) {
+      this.updateMarkings(tile);
+    }
   }
 
   /**
@@ -183,6 +192,10 @@ export class RoadNetwork {
       const sidewalkGroup = new THREE.Group();
       this.scene.add(sidewalkGroup);
 
+      // 路面標線與引導線群組
+      const markingsGroup = new THREE.Group();
+      this.scene.add(markingsGroup);
+
       this.tiles.set(key, {
         key,
         gx,
@@ -192,6 +205,7 @@ export class RoadNetwork {
         rotationY: mesh.rotation.y,
         mesh,
         sidewalkGroup,
+        markingsGroup,
         connectedNeighbors: [],
         lanes: [],
       });
@@ -212,6 +226,10 @@ export class RoadNetwork {
       { dx: 0, dz: 2 },  // 南
       { dx: 2, dz: 0 },  // 東
       { dx: -2, dz: 0 }, // 西
+      { dx: 0, dz: -4 }, // 北2格
+      { dx: 0, dz: 4 },  // 南2格
+      { dx: 4, dz: 0 },  // 東2格
+      { dx: -4, dz: 0 }, // 西2格
     ];
 
     for (const off of offsets) {
@@ -228,6 +246,14 @@ export class RoadNetwork {
 
     // 2. 重新編織所有受影響格位間的連續車道有向圖
     this.rebuildLaneGraph();
+
+    // 3. 重新生成所有受影響格位的路面導向標線與轉彎引導線
+    for (const key of affectedKeys) {
+      const t = this.tiles.get(key);
+      if (t) {
+        this.updateMarkings(t);
+      }
+    }
   }
 
   /**
@@ -387,6 +413,79 @@ export class RoadNetwork {
         // 轉彎道內側轉角人行道 (精準連接相鄰兩條車道內側人行道)
         addBox(swWidth, swWidth, +swCenter, +swCenter);
         break;
+    }
+  }
+
+  /**
+   * 重建本格位的行車導向標線
+   * 遵循標準道路工程規範：
+   * 1. 路口內部 (FourWay / ThreeWay) 與彎道 (Corner) 保持純淨平整瀝青路面，絕不在路口中心繪製任何雜亂線段或箭頭。
+   * 2. 導向箭頭標線僅在「進入路口前之接近直道車道 (Approach Lanes)」精準繪製 1 枚，讓駕駛人在進入路口前清楚確認可行駛之方向。
+   */
+  private updateMarkings(tile: RoadTile): void {
+    tile.markingsGroup.clear();
+
+    const { gx, gz, type } = tile;
+
+    // 僅在直線車道 (Straight) 上且該車道朝向路口前進時，於接近端車道繪製導向標線
+    if (type !== 'Straight') {
+      return;
+    }
+
+    const northKey = `${gx},${gz - 2}`;
+    const southKey = `${gx},${gz + 2}`;
+    const eastKey = `${gx + 2},${gz}`;
+    const westKey = `${gx - 2},${gz}`;
+
+    const LANE_OFFSET = 0.28;
+    const APPROACH_OFFSET = 0.45; // 距離進入路口之交界處 0.55m
+
+    // 1. 北側相鄰為路口：本格位之北向車道 (X = +LANE_OFFSET，前進方向 -Z) 即將駛入北側路口
+    const northNeighbor = this.tiles.get(northKey);
+    if (northNeighbor && (northNeighbor.type === 'FourWay' || northNeighbor.type === 'ThreeWay')) {
+      const canStraight = this.tiles.has(`${gx},${gz - 4}`);
+      const canLeft = this.tiles.has(`${gx - 2},${gz - 2}`);
+      const canRight = this.tiles.has(`${gx + 2},${gz - 2}`);
+      const arrowType = RoadMarkingFactory.getArrowType(canStraight, canLeft, canRight);
+      const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, 0); // 朝向 -Z (北，直行方向)
+      arrowMesh.position.set(gx + LANE_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz - APPROACH_OFFSET);
+      tile.markingsGroup.add(arrowMesh);
+    }
+
+    // 2. 南側相鄰為路口：本格位之南向車道 (X = -LANE_OFFSET，前進方向 +Z) 即將駛入南側路口
+    const southNeighbor = this.tiles.get(southKey);
+    if (southNeighbor && (southNeighbor.type === 'FourWay' || southNeighbor.type === 'ThreeWay')) {
+      const canStraight = this.tiles.has(`${gx},${gz + 4}`);
+      const canLeft = this.tiles.has(`${gx + 2},${gz + 2}`);
+      const canRight = this.tiles.has(`${gx - 2},${gz + 2}`);
+      const arrowType = RoadMarkingFactory.getArrowType(canStraight, canLeft, canRight);
+      const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, Math.PI); // 朝向 +Z (南，直行方向)
+      arrowMesh.position.set(gx - LANE_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz + APPROACH_OFFSET);
+      tile.markingsGroup.add(arrowMesh);
+    }
+
+    // 3. 東側相鄰為路口：本格位之東向車道 (Z = +LANE_OFFSET，前進方向 +X) 即將駛入東側路口
+    const eastNeighbor = this.tiles.get(eastKey);
+    if (eastNeighbor && (eastNeighbor.type === 'FourWay' || eastNeighbor.type === 'ThreeWay')) {
+      const canStraight = this.tiles.has(`${gx + 4},${gz}`);
+      const canLeft = this.tiles.has(`${gx + 2},${gz - 2}`);
+      const canRight = this.tiles.has(`${gx + 2},${gz + 2}`);
+      const arrowType = RoadMarkingFactory.getArrowType(canStraight, canLeft, canRight);
+      const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, -Math.PI / 2); // 朝向 +X (東，直行方向)
+      arrowMesh.position.set(gx + APPROACH_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz + LANE_OFFSET);
+      tile.markingsGroup.add(arrowMesh);
+    }
+
+    // 4. 西側相鄰為路口：本格位之西向車道 (Z = -LANE_OFFSET，前進方向 -X) 即將駛入西側路口
+    const westNeighbor = this.tiles.get(westKey);
+    if (westNeighbor && (westNeighbor.type === 'FourWay' || westNeighbor.type === 'ThreeWay')) {
+      const canStraight = this.tiles.has(`${gx - 4},${gz}`);
+      const canLeft = this.tiles.has(`${gx - 2},${gz + 2}`);
+      const canRight = this.tiles.has(`${gx - 2},${gz - 2}`);
+      const arrowType = RoadMarkingFactory.getArrowType(canStraight, canLeft, canRight);
+      const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, Math.PI / 2); // 朝向 -X (西，直行方向)
+      arrowMesh.position.set(gx - APPROACH_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz - LANE_OFFSET);
+      tile.markingsGroup.add(arrowMesh);
     }
   }
 

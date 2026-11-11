@@ -938,3 +938,139 @@ $$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
 
 
 
+
+### 二十六、低密度住宅全面換代重構與人體工學比例技術架構
+
+#### 26.1 微縮人體工學尺度對齊 (Ergonomic Scale Alignment)
+- **基礎比例錨點**：
+  - 男性市民身高：$0.178\text{m}$（代表現實成人 $1.78\text{m}$，比例為 $1\text{ 單位} = 10\text{m}$）。
+  - 自用轎車規格：長 $0.369\text{m}$、寬 $0.198\text{m}$、高 $0.142\text{m}$。
+- **建築尺度對齊矩陣**：
+  - **玄關大門**：寬 $0.09\text{m} \sim 0.11\text{m}$、高 $0.21\text{m}$。市民通過時保留約 $3.2\text{cm}$ 舒適頭部淨空，把手位置離地 $0.10\text{m}$（齊市民腰部）。
+  - **一層牆身高度**：$0.28\text{m} \sim 0.32\text{m}$（約為市民身高的 $1.6 \sim 1.8$ 倍，完美對應室內層高 $2.8\text{m} \sim 3.2\text{m}$）。
+  - **雙層住宅高度**：牆身總高 $0.54\text{m} \sim 0.60\text{m}$，屋脊最高點達 $0.75\text{m} \sim 0.86\text{m}$。
+  - **窗台高度**：$0.08\text{m}$（齊市民腰際線），提供真實的開窗採光感。
+  - **陽台與木柵欄護欄高度**：$0.08\text{m} \sim 0.09\text{m}$（剛好位於市民腰腹至胸部，符合人體防墜安全比例）。
+  - **私家車道寬度**：$0.46\text{m} \sim 0.60\text{m}$，與寬 $0.198\text{m}$ 車輛留有兩側各 $13\text{cm} \sim 20\text{cm}$ 之舒適開門下車通道。
+
+#### 26.2 建築多幾何輪廓與原語演算法 (Procedural Architectural Primitives)
+1. **屋頂演算法**：
+   - `createGableRoof`：可設定前後左右四向屋簷外挑量（Overhangs）、山牆立面三角面與獨立頂脊壓條。
+   - `createHipRoof`：支援縱橫雙向四坡歇山頂，依寬深比例自適應生成中央水平頂脊與四角斜脊稜線。
+   - `createShedRoof`：當代單坡斜屋頂，支援指定傾斜軸向與方向，頂部平整覆蓋防水折板。
+   - `createFlatParapetRoof`：現代平屋頂帶女兒牆壓頂金屬條與下凹防水露台。
+   - `createDormer`：自帶迷你山牆斜頂之坡面老虎窗，與主屋頂斜面無縫嵌合。
+2. **景觀與生態構造**：
+   - `createPicketFence`：美式白木柵欄，垂直板條斜切尖角與上下橫向龍骨。
+   - `createHedge`：方塊修剪灌木綠籬，帶微凸立體倒角。
+   - `createDeciduousTree`：多面體（Dodecahedron）群聚蓬鬆樹冠，搭配漸層自然綠光影。
+   - `createConiferTree`：三層同心錐體松柏針葉樹。
+
+### 二十七、市民走路動畫 (Walk Cycle) 生物力學技術規格與關節架構
+
+#### 27.1 骨架節點階層 (Skeletal Joint Hierarchy)
+- **髖關節支點 (Hip Pivots)**：
+  - 男性：$y = 0.088\text{m}, x = \pm 0.016\text{m}$。
+  - 女性：$y = 0.082\text{m}, x = \pm 0.013\text{m}$。
+  - 子節點：大腿、小腿、鞋身與鞋底邊框，以旋轉軸 $X$ 進行擺腿。
+- **肩關節支點 (Shoulder Pivots)**：
+  - 男性：$y = 0.138\text{m}, x = \pm 0.029\text{m}$。
+  - 女性：$y = 0.130\text{m}, x = \pm 0.023\text{m}$。
+  - 子節點：袖管、前臂、手掌及手提包。
+- **軀幹與骨盆群組 (Torso & Pelvis Group)**：
+  - 承載骨盆、上身、領口、頸部、頭部、髮型與配件。
+  - 獨立上下顛簸位移，與雙腿支點解耦，保持腳底觸地穩定性。
+
+#### 27.2 雙足步態運動學方程式 (Kinematic Equations of Bipedal Gait)
+設步態相位 $\phi = \omega \cdot t$（$\omega = 7.5\text{ rad/s}$，頻率 $f \approx 1.2\text{ Hz}$）：
+1. **腿部前後跨步擺動**：
+   $$\theta_{\text{leg, left}}(t) = A_{\text{leg}} \cdot \sin(\phi)$$
+   $$\theta_{\text{leg, right}}(t) = -A_{\text{leg}} \cdot \sin(\phi)$$
+   其中 $A_{\text{leg}} = 0.42\text{ rad} \approx 24.1^\circ$。
+2. **手臂反相擺臂平衡**：
+   $$\theta_{\text{arm, left}}(t) = -A_{\text{arm}} \cdot \sin(\phi)$$
+   $$\theta_{\text{arm, right}}(t) = A_{\text{arm}} \cdot \sin(\phi)$$
+   其中 $A_{\text{arm}} = 0.36\text{ rad} \approx 20.6^\circ$。
+   側向避讓角度：$\theta_{\text{arm, roll}} = \pm 0.035\text{ rad} \approx \pm 2.0^\circ$。
+3. **骨盆雙倍頻顛簸 (Pelvic Bobbing)**：
+   $$y_{\text{torso}}(t) = y_{\text{base}} + |\sin(\phi)| \cdot A_{\text{bob}}$$
+   其中 $A_{\text{bob}} = 0.0035\text{m}$（每跨一步升起 $3.5\text{mm}$）。
+4. **重心轉移軀幹側旋 (Torso Yaw & Roll)**：
+   $$\psi_{\text{yaw}}(t) = A_{\text{yaw}} \cdot \sin(\phi), \quad A_{\text{yaw}} = 0.035\text{ rad}$$
+   $$\psi_{\text{roll}}(t) = -A_{\text{roll}} \cdot \sin(\phi), \quad A_{\text{roll}} = 0.015\text{ rad}$$
+
+---
+
+### 二十八、路邊停車入住、市民個資生成、依序下車與進屋走路動線技術架構
+
+#### 28.1 就近合法路邊停車位智慧探測與預約演算法 (Curbside Spot Matching & Reservation)
+- **候選路塊快篩與剪枝**：
+  - 僅納入符合路邊停車法規之 Straight / DeadEnd 直通路段（嚴格排除十字路口、T字路口、彎道及外部高速公路）。
+  - 依候選路塊幾何中心與房屋正門之歐式平面距離進行升序排序，首選房屋門前路塊。
+  - 當搜尋抵達之路塊距離已大於當前最優車位距離加 $2.0\text{m}$ 時，觸發剪枝提早中斷搜尋。
+- **車位坐標與朝向算子**：
+  - 南北向道路（$N \leftrightarrow S$）：西側路緣（$X = gx - 0.62\text{m}, \text{rotY} = \pi$）、東側路緣（$X = gx + 0.62\text{m}, \text{rotY} = 0$）。
+  - 東西向道路（$W \leftrightarrow E$）：北側路緣（$Z = gz - 0.62\text{m}, \text{rotY} = -\pi/2$）、南側路緣（$Z = gz + 0.62\text{m}, \text{rotY} = \pi/2$）。
+  - 優先探測靠近房屋方位之側緣，取房屋投影座標及前後偏移 $\pm 0.45\text{m}$ 進行碰撞檢驗。
+- **雙重防重疊佔用與在途預約機制 (Anti-Collision & Pre-Reservation)**：
+  - 檢驗候選點是否與任何現存停放車輛（`parkedCars`）距離小於 $0.46\text{m}$。
+  - 引入 `reservedSpots` 陣列：當車輛於外部公路出發時即刻登記預約座標，防止多棟住宅同時遷入時車輛爭搶同一車位。
+  - 車輛成功駛入停妥時觸發 `unreserveSpot`，並由 `parkExistingCarMesh` 接管車輛 3D Mesh 登記為持久靜態停車。
+
+#### 28.2 車道行駛至路緣停車平滑銜接 (Seamless Curbside Pull-In)
+- 車道自動選路：依據目標車位之側向（`west`/`east`/`north`/`south`），智慧匹配對應之順行車道（S/N/W/E）。
+- 在 A* 車道路徑序列尾端動態注入平滑進站點：
+  - 過渡點（Approach Point）：車道末端點與停車位之中間插值點，引導車身自車道中線自然斜向偏航靠邊。
+  - 終點定位點（Spot Point）：路緣石旁 $0.62\text{m}$ 精準停靠點，高度固定於 $y = 0.04\text{m}$。
+
+#### 28.3 人口即時結算與市民基本資料生成 (Instant Population & Demographic Generation)
+- **人口即時計增**：車輛抵達停車位停妥瞬間，立即執行 `building.currentOccupants += arrivingCount`，並連動 `getTotalPopulation()` 與底部狀態欄 HUD 即時更新。
+- **家庭/合居戶屬性生成引擎 (`generateCitizenProfiles`)**：
+  - 單人自住：年齡 $22 \sim 53$ 歲，性別各 50%。
+  - 雙人入住（伴侶/夫妻/室友）：首位戶長 $27 \sim 46$ 歲；次位 75% 機率為異性伴侶，年齡相仿（$\pm 3$ 歲）。
+  - 3人以上多口之家：第 3 位起高機率（70%）為未成年子女（$5 \sim 18$ 歲）或同住長輩（$45 \sim 65$ 歲）。
+  - 結合台灣常見姓氏（林、陳、黃、張、李、王等）與男女常用名字池，為每名市民指派唯一 ID、姓名、性別、年齡與所屬房屋 ID。
+
+#### 28.4 依序下車序列與步態動線管理 (Sequential Alighting & Walking Pipeline)
+- **交錯下車計時器**：每名市民設定交錯延遲時間 $\Delta t_i = 0.35 + i \times 1.1\text{ 秒}$。
+- **性別外觀精準映射**：延遲倒數歸零時，根據該名市民個資之 `profile.gender` 呼叫 `CitizenModelFactory.createCitizen` 生成對應男女模型。
+- **三段式步行航向與骨架步態**：
+  - 航點 1（人行道下車側）：自車身旁向人行道外側偏置 $0.18\text{m}$。
+  - 航點 2（房屋正門地界 Gate）：沿人行道步行至住宅前院小徑入口。
+  - 航點 3（房屋大門 Front Door Porch）：沿迎賓石板路進入門廊。
+  - 每幀以 $v = 1.0\text{ m/s}$ 朝向當前目標推進，即時計算移動向量角 $\text{atan2}(dx, dz)$ 更新市民轉向，同時即時調用 `animateCitizenWalk` 驅動腿部擺動、手臂反向擺盪與骨盆顛簸。
+  - 到達大門時市民模型優雅退場（進入房內）；整批市民全部進屋後標記房屋為 `moveInStatus = 'arrived'`。
+
+---
+
+### 二十九、路口行車導向標線與轉彎引導線程序化渲染技術架構
+
+#### 29.1 7 種標準路面導向箭頭程序化向量繪製 (Procedural Pavement Arrows)
+- **高解析度 Canvas 2D 向量路徑**：
+  - 統一採用 $256 \times 256$ 像素高解析畫布，純透無底色，以純白 `#ffffff` 填滿繪製。
+  - 箭桿規格：寬 $26\text{px}$、底端 $y = 238\text{px}$，箭頭頂尖 $y = 22\text{px}$，箭羽外展寬度 $76\text{px}$，內收夾角採用精確直線倒角。
+  - 轉彎分叉弧線：利用三階貝茲曲線（Cubic Bézier）自箭桿側翼 $y = 155\text{px}$ 處向外平滑擺盪 $90^\circ$，形成極致俐落的高速公路/市區標準導向箭頭。
+- **箭頭型態判定算子**：
+  $$\text{type} = f(\text{canStraight}, \text{canLeft}, \text{canRight})$$
+  - `straight`：直行專用（$\uparrow$）
+  - `left`：左轉專用（$\curvearrowleft$）
+  - `right`：右轉專用（$\curvearrowright$）
+  - `straight_left`：直行兼左轉（$\uparrow \curvearrowleft$，完全符合參考圖中間樣式）
+  - `straight_right`：直行兼右轉（$\uparrow \curvearrowright$）
+  - `left_right`：左右轉雙向分流（$\curvearrowleft \curvearrowright$，T 字路口支線專用）
+  - `all`：直行兼左右轉全通（$\curvearrowleft \uparrow \curvearrowright$，十字路口單車道全通）
+
+#### 29.2 車道進口導向標線拓撲幾何吸附
+- **空間定位錨點**：
+  - 車道中心偏移距 $\text{LANE\_OFFSET} = 0.28\text{m}$。
+  - 縱向定位距 $\text{ARROW\_DIST} = 0.52\text{m}$（置於 $2.0\text{m} \times 2.0\text{m}$ 路口格位內部，斑馬線與路口交匯核心之間的車道空間）。
+- **進口車流方向與旋轉映射**：
+  - 北側進口（車流向南 $+Z$）：$\text{rotZ} = \pi$，允許判定 $\text{Straight}=\text{hasS}, \text{Left}=\text{hasE}, \text{Right}=\text{hasW}$。
+  - 南側進口（車流向北 $-Z$）：$\text{rotZ} = 0$，允許判定 $\text{Straight}=\text{hasN}, \text{Left}=\text{hasW}, \text{Right}=\text{hasE}$。
+  - 東側進口（車流向西 $-X$）：$\text{rotZ} = \pi/2$，允許判定 $\text{Straight}=\text{hasW}, \text{Left}=\text{hasS}, \text{Right}=\text{hasN}$。
+  - 西側進口（車流向東 $+X$）：$\text{rotZ} = -\pi/2$，允許判定 $\text{Straight}=\text{hasE}, \text{Left}=\text{hasN}, \text{Right}=\text{hasS}$。
+
+#### 29.3 路口內部圓弧轉彎引導虛線 (Turning Guide Dashes)
+- 提取路口內轉彎車道（起訖軸向不同之貝茲曲線車道，例如北往東、南往西、西往北等）。
+- 沿著平滑航點序列取樣中間核心段，生成尺寸 $0.024\text{m} \times 0.08\text{m}$ 之純白微型虛線段。
+- 每個虛線段以切線角度即時校正航向角，高度設置於 $y = 0.038\text{m}$，提供清晰的車輛轉彎軌跡視覺引導。

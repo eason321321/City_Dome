@@ -2,6 +2,7 @@ import { WorldTime } from '../types';
 
 export type TimeChangeListener = (time: WorldTime) => void;
 export type PauseChangeListener = (isPaused: boolean) => void;
+export type TimeScaleChangeListener = (timeScale: number) => void;
 
 /**
  * 虛擬世界時間管理器
@@ -10,7 +11,7 @@ export type PauseChangeListener = (isPaused: boolean) => void;
 export class TimeManager {
   private time: WorldTime;
   private isPaused: boolean = false;
-  private timeScale: number = 1.0; // 遊戲模擬速度倍率 (預設 1.0x，未來支援加速功能 2x, 3x, 5x 等)
+  private timeScale: number = 0.75; // 遊戲模擬速度倍率 (預設 0.75x，依指示適度放慢基本速度提供更舒適觀察節奏)
   private virtualSecondsAccumulator: number = 0;
   
   // 1 實際秒 = 6 虛擬分鐘 (即 10 實際秒 = 1 虛擬小時)
@@ -18,6 +19,7 @@ export class TimeManager {
 
   private timeListeners: Set<TimeChangeListener> = new Set();
   private pauseListeners: Set<PauseChangeListener> = new Set();
+  private timeScaleListeners: Set<TimeScaleChangeListener> = new Set();
 
   constructor(initialYear = 2027, initialMonth = 1, initialDay = 1, initialHour = 6, initialMinute = 0) {
     this.time = {
@@ -43,7 +45,41 @@ export class TimeManager {
   }
 
   public setTimeScale(scale: number): void {
-    this.timeScale = Math.max(0, scale);
+    const clamped = Math.max(0, scale);
+    if (this.timeScale !== clamped) {
+      this.timeScale = clamped;
+      for (const listener of this.timeScaleListeners) {
+        listener(this.timeScale);
+      }
+    }
+  }
+
+  public onTimeScaleChange(listener: TimeScaleChangeListener): () => void {
+    this.timeScaleListeners.add(listener);
+    listener(this.timeScale);
+    return () => this.timeScaleListeners.delete(listener);
+  }
+
+  /**
+   * 取得虛擬時間比例換算常數
+   * 1 模擬秒 = 360 虛擬秒 = 6 虛擬分鐘 (10 模擬秒 = 1 虛擬小時)
+   */
+  public getVirtualSecondsPerSimSecond(): number {
+    return this.virtualSecondsPerRealSecond;
+  }
+
+  /**
+   * 將模擬時間秒數轉換為虛擬遊戲分鐘數
+   */
+  public toVirtualMinutes(simSeconds: number): number {
+    return simSeconds * (this.virtualSecondsPerRealSecond / 60);
+  }
+
+  /**
+   * 將模擬時間秒數轉換為虛擬遊戲小時數
+   */
+  public toVirtualHours(simSeconds: number): number {
+    return simSeconds * (this.virtualSecondsPerRealSecond / 3600);
   }
 
   /**

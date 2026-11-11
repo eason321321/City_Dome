@@ -33,6 +33,9 @@ export class ParkingManager {
   private parkedCars: Map<string, ParkedCar> = new Map();
   private nextCarId: number = 1;
 
+  // 記錄已被在途車輛預約的停車位座標，避免多輛車同時爭搶同一個車位
+  private reservedSpots: THREE.Vector3[] = [];
+
   // 停車與路中線之橫向偏移距離 (車道寬 0.75m，路緣在 0.75m，車寬 0.20m，車身中心置於 0.62m 處，緊貼路緣 3cm，距行車道邊界 14cm)
   private readonly CURB_PARKING_OFFSET = 0.62;
 
@@ -122,10 +125,8 @@ export class ParkingManager {
     }
 
     // 檢查該側是否有其他停車重疊或距離過近
-    for (const car of this.parkedCars.values()) {
-      if (car.position.distanceTo(spotPos) < this.MIN_PARKING_DISTANCE) {
-        return { valid: false, reason: '此位置已有其他停放車輛 (車位已被佔用)' };
-      }
+    if (this.isSpotOccupied(spotPos)) {
+      return { valid: false, reason: '此位置已有其他停放車輛或已遭預約' };
     }
 
     return {
@@ -137,6 +138,145 @@ export class ParkingManager {
         tileKey,
       },
     };
+  }
+
+  /**
+   * 預約停車位（在途市民車輛前往中，避免重複配對）
+   */
+  public reserveSpot(spot: CurbsideSpot): void {
+    this.reservedSpots.push(spot.position.clone());
+  }
+
+  /**
+   * 解除預約（車輛抵達正式停入或路徑取消時呼叫）
+   */
+  public unreserveSpot(spot: CurbsideSpot): void {
+    const idx = this.reservedSpots.findIndex((p) => p.distanceTo(spot.position) < 0.2);
+    if (idx !== -1) {
+      this.reservedSpots.splice(idx, 1);
+    }
+  }
+
+  /**
+   * 檢查某座標是否已被停車或被在途車輛預約
+   */
+  public isSpotOccupied(pos: THREE.Vector3): boolean {
+    for (const car of this.parkedCars.values()) {
+      if (car.position.distanceTo(pos) < this.MIN_PARKING_DISTANCE) {
+        return true;
+      }
+    }
+    for (const resPos of this.reservedSpots) {
+      if (resPos.distanceTo(pos) < this.MIN_PARKING_DISTANCE) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 尋找離目標房屋門前最近之可用合法路邊停車位
+   * @param homePos 房屋正面座標
+   * @param preferredTileKey 首選路塊 Key (若有)
+   */
+  public findClosestAvailableSpot(homePos: THREE.Vector3, preferredTileKey?: string): CurbsideSpot | null {
+    const allTiles = this.roadNetwork.getAllTiles();
+    const candidateTiles: RoadTile[] = [];
+
+    for (const tile of allTiles) {
+      if (this.canParkAtTile(tile).allowed) {
+        candidateTiles.push(tile);
+      }
+    }
+
+    if (candidateTiles.length === 0) return null;
+
+    // 依與 homePos 之平面距離升序排序 (優先考量首選路塊)
+    candidateTiles.sort((a, b) => {
+      if (preferredTileKey) {
+        if (a.key === preferredTileKey && b.key !== preferredTileKey) return -1;
+        if (b.key === preferredTileKey && a.key !== preferredTileKey) return 1;
+      }
+      const distA = Math.hypot(a.gx - homePos.x, a.gz - homePos.z);
+      const distB = Math.hypot(b.gx - homePos.x, b.gz - homePos.z);
+      return distA - distB;
+    });
+
+    let bestSpot: CurbsideSpot | null = null;
+    let minDistance = Infinity;
+
+    for (const tile of candidateTiles) {
+      const tileDist = Math.hypot(tile.gx - homePos.x, tile.gz - homePos.z);
+      if (bestSpot && tileDist > minDistance + 2.0) {
+        break; // 提早剪枝
+      }
+
+      const isNorthSouth = tile.rotationY === 0;
+      const testOffsets = [-0.45, 0.45];
+
+      if (isNorthSouth) {
+        const sides: Array<{ side: 'west' | 'east'; x: number; rotY: number }> = [
+          { side: 'west', x: tile.gx - this.CURB_PARKING_OFFSET, rotY: Math.PI },
+          { side: 'east', x: tile.gx + this.CURB_PARKING_OFFSET, rotY: 0 },
+        ];
+        // 優先測試靠近房屋該側
+        sides.sort((s1, s2) => Math.abs(s1.x - homePos.x) - Math.abs(s2.x - homePos.x));
+
+        for (const s of sides) {
+          const projectedZ = THREE.MathUtils.clamp(homePos.z, tile.gz - 0.55, tile.gz + 0.55);
+          const zCandidates = [projectedZ, tile.gz + testOffsets[0], tile.gz + testOffsets[1]];
+
+          for (const testZ of zCandidates) {
+            const pos = new THREE.Vector3(s.x, 0.04, testZ);
+            if (!this.isSpotOccupied(pos)) {
+              const d = pos.distanceTo(homePos);
+              if (d < minDistance) {
+                minDistance = d;
+                bestSpot = {
+                  position: pos,
+                  rotationY: s.rotY,
+                  side: s.side,
+                  tileKey: tile.key,
+                };
+              }
+            }
+          }
+        }
+      } else {
+        const sides: Array<{ side: 'north' | 'south'; z: number; rotY: number }> = [
+          { side: 'north', z: tile.gz - this.CURB_PARKING_OFFSET, rotY: -Math.PI / 2 },
+          { side: 'south', z: tile.gz + this.CURB_PARKING_OFFSET, rotY: Math.PI / 2 },
+        ];
+        sides.sort((s1, s2) => Math.abs(s1.z - homePos.z) - Math.abs(s2.z - homePos.z));
+
+        for (const s of sides) {
+          const projectedX = THREE.MathUtils.clamp(homePos.x, tile.gx - 0.55, tile.gx + 0.55);
+          const xCandidates = [projectedX, tile.gx + testOffsets[0], tile.gx + testOffsets[1]];
+
+          for (const testX of xCandidates) {
+            const pos = new THREE.Vector3(testX, 0.04, s.z);
+            if (!this.isSpotOccupied(pos)) {
+              const d = pos.distanceTo(homePos);
+              if (d < minDistance) {
+                minDistance = d;
+                bestSpot = {
+                  position: pos,
+                  rotationY: s.rotY,
+                  side: s.side,
+                  tileKey: tile.key,
+                };
+              }
+            }
+          }
+        }
+      }
+
+      if (bestSpot && preferredTileKey && tile.key === preferredTileKey) {
+        break;
+      }
+    }
+
+    return bestSpot;
   }
 
   /**
@@ -170,6 +310,35 @@ export class ParkingManager {
     this.parkedCars.set(parkedCar.id, parkedCar);
 
     return { success: true, car: parkedCar };
+  }
+
+  /**
+   * 將開車抵達之車輛模型登記為合法路邊停放車輛 (接管 Mesh，不銷毀)
+   */
+  public parkExistingCarMesh(mesh: THREE.Group, spot: CurbsideSpot, colorHex: number): ParkedCar {
+    mesh.position.copy(spot.position);
+    mesh.rotation.y = spot.rotationY;
+
+    // 解除預約
+    this.unreserveSpot(spot);
+
+    const parkedCar: ParkedCar = {
+      id: `parked_car_${this.nextCarId++}`,
+      tileKey: spot.tileKey,
+      side: spot.side,
+      position: spot.position.clone(),
+      rotationY: spot.rotationY,
+      color: colorHex,
+      mesh,
+    };
+
+    mesh.userData = {
+      ...mesh.userData,
+      parkedCarId: parkedCar.id,
+      isResidentCar: true,
+    };
+    this.parkedCars.set(parkedCar.id, parkedCar);
+    return parkedCar;
   }
 
   /**

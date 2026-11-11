@@ -156,7 +156,9 @@ if (container) {
     roadManager.getRoadNetwork(),
     vehicleManager
   );
+  buildingManager.setParkingManager(parkingManager);
   devMenu.setBuildingManager(buildingManager);
+  devMenu.setTimeManager(timeManager);
 
   // 11. 視窗自適應
   window.addEventListener('resize', () => {
@@ -171,10 +173,12 @@ if (container) {
   function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
+    // 限制單幀模擬步長（最大 0.1s），防止瀏覽器切換分頁或暫時卡頓導致物理模擬穿透或突躍
+    const clampedDelta = Math.min(delta, 0.1);
 
-    // 更新時間與模擬 (支援暫停與倍速)
-    timeManager.update(delta);
-    const simDelta = timeManager.getSimulationDelta(delta);
+    // 更新時間與模擬 (支援暫停與倍速，嚴格依遊戲世界時間推進)
+    timeManager.update(clampedDelta);
+    const simDelta = timeManager.getSimulationDelta(clampedDelta);
     const isPaused = timeManager.getIsPaused();
 
     // 更新道路網絡（紅綠燈號誌倒數計時與狀態切換）

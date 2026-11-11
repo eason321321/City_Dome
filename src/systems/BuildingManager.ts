@@ -4,6 +4,16 @@ import { ZoningManager } from './ZoningManager';
 import { RoadNetwork } from './RoadNetwork';
 import { Pathfinding, PathResult } from './Pathfinding';
 import { VehicleManager } from '../simulation/VehicleManager';
+import { ParkingManager, CurbsideSpot } from '../simulation/ParkingManager';
+import { CitizenModelFactory } from '../rendering/CitizenModelFactory';
+
+export interface CitizenProfile {
+  id: string;
+  name: string;
+  gender: 'male' | 'female';
+  age: number;
+  homeBuildingId: string;
+}
 
 export interface PlacedBuilding {
   id: string;
@@ -30,6 +40,7 @@ export interface PlacedBuilding {
   currentOccupants: number;         // 當前房內人數
   isCoLiving: boolean;              // 是否合居 (true: 與人合居, false: 自己住)
   moveInStatus: 'none' | 'enRoute' | 'arrived' | 'waitingForRoad';
+  residents: CitizenProfile[];      // 入住市民詳細個資清單
   // 施工吊臂作業相關動畫元件參照
   craneRefs?: {
     slewArm: THREE.Group;
@@ -42,6 +53,20 @@ export interface PlacedBuilding {
     mastHeight: number;
     animTimer: number;
   };
+}
+
+export interface MovingInPedestrian {
+  id: string;
+  buildingId: string;
+  profile: CitizenProfile;
+  mesh?: THREE.Group;
+  spawnDelay: number;
+  currentWaypointIndex: number;
+  waypoints: THREE.Vector3[];
+  speed: number;
+  walkTimer: number;
+  isAlighted: boolean;
+  hasEnteredHouse: boolean;
 }
 
 export type HousingDensity = 'Low' | 'Medium' | 'High';
@@ -88,6 +113,7 @@ export class BuildingManager {
   private zoningManager: ZoningManager;
   private roadNetwork: RoadNetwork;
   private vehicleManager: VehicleManager;
+  private parkingManager: ParkingManager | null = null;
 
   // 格位尺寸與建物縮放 (配合 0.5m x 0.5m 小格子，建築物底面積為原先 1/4)
   private readonly CELL_SIZE: number = 0.5;
@@ -97,6 +123,11 @@ export class BuildingManager {
   private buildings: Map<string, PlacedBuilding> = new Map();
   private occupiedCells: Set<string> = new Set();
   private nextBuildingId: number = 1;
+
+  // 市民行人生命週期與走路動線管理
+  private activePedestrians: MovingInPedestrian[] = [];
+  private pedestrianContainer: THREE.Group;
+  private nextCitizenId: number = 1;
 
   // 住房需求統計與佇列清單 (需求清單最新在最上方)
   private demandQueue: HousingDemand[] = [];
@@ -131,8 +162,16 @@ export class BuildingManager {
     this.buildingsContainer.name = 'BuildingsContainer';
     this.scene.add(this.buildingsContainer);
 
+    this.pedestrianContainer = new THREE.Group();
+    this.pedestrianContainer.name = 'PedestrianContainer';
+    this.scene.add(this.pedestrianContainer);
+
     this.tooltipElement = this.createTooltipElement();
     this.bindHoverEvents();
+  }
+
+  public setParkingManager(parkingManager: ParkingManager): void {
+    this.parkingManager = parkingManager;
   }
 
   // ==========================================
@@ -720,6 +759,7 @@ export class BuildingManager {
       currentOccupants: 0,
       isCoLiving,
       moveInStatus: 'none',
+      residents: [],
       craneRefs: constructionSite.craneRefs,
     };
 
@@ -1207,7 +1247,128 @@ export class BuildingManager {
       }
     }
 
+    // 更新正在下車與走入房內的市民動態與走路動畫
+    for (let i = this.activePedestrians.length - 1; i >= 0; i--) {
+      const ped = this.activePedestrians[i];
+
+      // 階段 1：等待交錯下車時間
+      if (!ped.isAlighted) {
+        ped.spawnDelay -= deltaTime;
+        if (ped.spawnDelay <= 0) {
+          ped.isAlighted = true;
+          // 下車時生成市民模型，以市民基本資料之性別決定性別模型
+          const mesh = CitizenModelFactory.createCitizen({
+            gender: ped.profile.gender,
+            variant: Math.floor(Math.random() * 3),
+          });
+          mesh.position.copy(ped.waypoints[0]);
+          this.pedestrianContainer.add(mesh);
+          ped.mesh = mesh;
+        }
+        continue;
+      }
+
+      // 階段 2：若已進入屋內或模型不存在，清理該市民
+      if (ped.hasEnteredHouse || !ped.mesh) {
+        this.activePedestrians.splice(i, 1);
+        continue;
+      }
+
+      // 階段 3：驅動市民沿著航點序列步行走向房子
+      const wps = ped.waypoints;
+      if (ped.currentWaypointIndex < wps.length) {
+        const targetPos = wps[ped.currentWaypointIndex];
+        const toTarget = new THREE.Vector3().subVectors(targetPos, ped.mesh.position);
+        toTarget.y = 0; // 平面步行
+        const dist = toTarget.length();
+        const moveDist = ped.speed * deltaTime;
+
+        if (dist <= moveDist + 0.01) {
+          ped.mesh.position.copy(targetPos);
+          ped.currentWaypointIndex++;
+        } else {
+          toTarget.normalize().multiplyScalar(moveDist);
+          ped.mesh.position.add(toTarget);
+          // 面朝前進方向
+          const angle = Math.atan2(toTarget.x, toTarget.z);
+          ped.mesh.rotation.y = angle;
+        }
+
+        // 驅動即時走路動畫 (男女通用關節擺動、反相擺臂、顛簸起伏與重心微搖)
+        ped.walkTimer += deltaTime;
+        CitizenModelFactory.animateCitizenWalk(ped.mesh, ped.walkTimer, 7.8, 1.0);
+      } else {
+        // 已走入屋內：市民正式進屋，移除 3D 模型
+        ped.hasEnteredHouse = true;
+        this.pedestrianContainer.remove(ped.mesh);
+        ped.mesh = undefined;
+
+        // 檢查該棟建築是否所有市民皆已走入屋內
+        const bld = this.buildings.get(ped.buildingId);
+        if (bld) {
+          const remainingForBuilding = this.activePedestrians.some(
+            (p) => p.buildingId === bld.id && !p.hasEnteredHouse
+          );
+          if (!remainingForBuilding) {
+            bld.moveInStatus = 'arrived';
+          }
+        }
+        this.activePedestrians.splice(i, 1);
+      }
+    }
+
     this.updateTooltipContent();
+  }
+
+  /**
+   * 隨機生成家庭或合居市民的基本個資（年齡、性別、姓名）
+   */
+  private generateCitizenProfiles(buildingId: string, count: number): CitizenProfile[] {
+    const surnames = ['林', '陳', '黃', '張', '李', '王', '吳', '劉', '蔡', '楊', '許', '鄭', '謝', '洪', '郭', '曾', '邱', '廖', '賴', '周'];
+    const maleNames = ['冠廷', '宇軒', '柏翰', '宗翰', '承翰', '家豪', '志偉', '俊傑', '冠宇', '威廷', '哲瑋', '廷宇', '建宏', '柏睿', '翔宇', '子豪', '彥廷', '志明', '文傑', '俊宇'];
+    const femaleNames = ['雅婷', '佳穎', '婷萱', '怡萱', '詩涵', '佩萱', '欣妤', '鈺婷', '雅筑', '怡君', '詠晴', '郁婷', '冠妤', '巧涵', '芝瑩', '心妤', '惠雯', '淑芬', '雅雯', '佳蓉'];
+
+    const profiles: CitizenProfile[] = [];
+    const isSingle = count === 1;
+
+    for (let i = 0; i < count; i++) {
+      let gender: 'male' | 'female';
+      let age: number;
+
+      if (isSingle) {
+        gender = Math.random() < 0.5 ? 'male' : 'female';
+        age = 22 + Math.floor(Math.random() * 32); // 22 ~ 53 歲單身青年/壯年
+      } else if (i === 0) {
+        gender = Math.random() < 0.5 ? 'male' : 'female';
+        age = 27 + Math.floor(Math.random() * 20); // 27 ~ 46 歲戶長
+      } else if (i === 1) {
+        // 配偶或伴侶 (75% 機率為異性)
+        gender = Math.random() < 0.75
+          ? (profiles[0].gender === 'male' ? 'female' : 'male')
+          : (Math.random() < 0.5 ? 'male' : 'female');
+        age = Math.max(22, profiles[0].age + Math.floor(Math.random() * 7) - 3); // 年齡相近
+      } else {
+        // 第 3 人以上可能是小孩或家人
+        gender = Math.random() < 0.5 ? 'male' : 'female';
+        const isChild = Math.random() < 0.7;
+        age = isChild ? (5 + Math.floor(Math.random() * 14)) : (20 + Math.floor(Math.random() * 25));
+      }
+
+      const surname = surnames[Math.floor(Math.random() * surnames.length)];
+      const givenName = gender === 'male'
+        ? maleNames[Math.floor(Math.random() * maleNames.length)]
+        : femaleNames[Math.floor(Math.random() * femaleNames.length)];
+
+      profiles.push({
+        id: `cit_${this.nextCitizenId++}`,
+        name: `${surname}${givenName}`,
+        gender,
+        age,
+        homeBuildingId: buildingId,
+      });
+    }
+
+    return profiles;
   }
 
   /**
@@ -1226,11 +1387,22 @@ export class BuildingManager {
   }
 
   /**
-   * 派遣市民車輛自外部邊界公路開車進入城市直達住處家門
+   * 派遣市民車輛自外部邊界公路開車進入城市，尋找離家最近之停車位停車後下車步入家門
    * @param arrivingCount 本批抵達遷入之市民人數
    */
   private dispatchCitizenVehicle(building: PlacedBuilding, arrivingCount: number): void {
-    const roadTile = this.roadNetwork.getTile(building.targetRoadTileKey);
+    // 1. 市民尋找離家最近之合法路邊停車位
+    let parkingSpot: CurbsideSpot | null = null;
+    if (this.parkingManager) {
+      parkingSpot = this.parkingManager.findClosestAvailableSpot(
+        building.frontWorldPos,
+        building.targetRoadTileKey
+      );
+    }
+
+    // 若找到車位，以車位所在路塊為導航目標；若無則以房屋正前方路塊為目標
+    const targetTileKey = parkingSpot ? parkingSpot.tileKey : building.targetRoadTileKey;
+    const roadTile = this.roadNetwork.getTile(targetTileKey);
     if (!roadTile || roadTile.lanes.length === 0) {
       building.moveInStatus = 'waitingForRoad';
       return;
@@ -1241,10 +1413,27 @@ export class BuildingManager {
     const eastEntry = this.roadNetwork.getHighwayEastEntryLane();
 
     let bestPath: PathResult | null = null;
-    let bestDistToHouse = Infinity;
+    let bestDistToTarget = Infinity;
 
-    // 檢驗該路塊上的所有車道，找出可自外部公路抵達且離正門最近的有效路線
-    for (const lane of roadTile.lanes) {
+    // 若有車位，優先匹配停車側對應方位之車道 (確保車輛順行靠邊)
+    // 西側路緣: 南向(S); 東側路緣: 北向(N); 北側路緣: 西向(W); 南側路緣: 東向(E)
+    let candidateLanes = roadTile.lanes;
+    if (parkingSpot) {
+      const preferred = roadTile.lanes.filter((l) => {
+        if (parkingSpot!.side === 'west') return l.direction === 'S';
+        if (parkingSpot!.side === 'east') return l.direction === 'N';
+        if (parkingSpot!.side === 'north') return l.direction === 'W';
+        if (parkingSpot!.side === 'south') return l.direction === 'E';
+        return false;
+      });
+      if (preferred.length > 0) {
+        candidateLanes = preferred;
+      }
+    }
+
+    const targetPos = parkingSpot ? parkingSpot.position : building.frontWorldPos;
+
+    for (const lane of candidateLanes) {
       let lanePath: PathResult | null = null;
       if (westEntry) {
         const pW = Pathfinding.findShortestPath(westEntry.id, lane.id, allLanes);
@@ -1262,10 +1451,34 @@ export class BuildingManager {
       }
 
       if (lanePath) {
-        const distToHouse = lane.centerPoint.distanceTo(building.frontWorldPos);
-        if (!bestPath || distToHouse < bestDistToHouse) {
+        const dist = lane.centerPoint.distanceTo(targetPos);
+        if (!bestPath || dist < bestDistToTarget) {
           bestPath = lanePath;
-          bestDistToHouse = distToHouse;
+          bestDistToTarget = dist;
+        }
+      }
+    }
+
+    // 若首選車道無外聯路徑，退回嘗試該路塊之所有車道
+    if (!bestPath && candidateLanes !== roadTile.lanes) {
+      for (const lane of roadTile.lanes) {
+        let lanePath: PathResult | null = null;
+        if (westEntry) {
+          const pW = Pathfinding.findShortestPath(westEntry.id, lane.id, allLanes);
+          if (pW && pW.routeWaypoints && pW.routeWaypoints.length >= 2) lanePath = pW;
+        }
+        if (eastEntry) {
+          const pE = Pathfinding.findShortestPath(eastEntry.id, lane.id, allLanes);
+          if (pE && pE.routeWaypoints && pE.routeWaypoints.length >= 2) {
+            if (!lanePath || pE.totalDistance < lanePath.totalDistance) lanePath = pE;
+          }
+        }
+        if (lanePath) {
+          const dist = lane.centerPoint.distanceTo(targetPos);
+          if (!bestPath || dist < bestDistToTarget) {
+            bestPath = lanePath;
+            bestDistToTarget = dist;
+          }
         }
       }
     }
@@ -1275,15 +1488,98 @@ export class BuildingManager {
       return;
     }
 
+    // 預約該停車位，避免後續其他車輛爭搶
+    if (parkingSpot && this.parkingManager) {
+      this.parkingManager.reserveSpot(parkingSpot);
+    }
+
+    // 將停車位座標加入導航路徑最後，使車輛順暢靠邊駛入車位
+    if (parkingSpot) {
+      const rwps = bestPath.routeWaypoints;
+      const lastWp = rwps[rwps.length - 1];
+
+      const approachPoint = lastWp.position.clone().lerp(parkingSpot.position, 0.5);
+      approachPoint.y = 0.04;
+      rwps.push({
+        position: approachPoint,
+        laneId: lastWp.laneId,
+        isIntersection: false,
+        isStopLine: false,
+      });
+
+      const spotTarget = parkingSpot.position.clone();
+      spotTarget.y = 0.04;
+      rwps.push({
+        position: spotTarget,
+        laneId: lastWp.laneId,
+        isIntersection: false,
+        isStopLine: false,
+      });
+    }
+
     building.moveInStatus = 'enRoute';
     const carColors = [0x1d4ed8, 0x0f172a, 0x94a3b8, 0x047857, 0xb91c1c];
     const chosenColor = carColors[Math.floor(Math.random() * carColors.length)];
 
-    this.vehicleManager.spawnMovingInVehicle(bestPath, chosenColor, () => {
-      // 開車抵達家門前消失，房內人數正式生效 (增加本次遷入之市民人數)
-      building.currentOccupants += arrivingCount;
-      building.moveInStatus = 'arrived';
-    });
+    this.vehicleManager.spawnMovingInVehicle(
+      bestPath,
+      chosenColor,
+      (arrivedVehicle) => {
+        // 1. 車輛成功停車：將其登記為路邊停放車輛 (保留 Mesh，永駐路側)
+        if (parkingSpot && this.parkingManager) {
+          this.parkingManager.parkExistingCarMesh(arrivedVehicle.mesh, parkingSpot, chosenColor);
+        }
+
+        // 2. 車子成功停車時計算人口數增加 (立即生效)
+        building.currentOccupants += arrivingCount;
+
+        // 3. 車子停車成功後生成車內所有市民基本資料 (年齡以及性別)
+        const newResidents = this.generateCitizenProfiles(building.id, arrivingCount);
+        building.residents.push(...newResidents);
+
+        // 4. 計算市民下車走入房內之人行動線
+        const carParkPos = parkingSpot ? parkingSpot.position.clone() : building.frontWorldPos.clone();
+
+        // 人行道下車側位置 (靠向人行道外側 0.18m)
+        const sidewalkPos = carParkPos.clone();
+        if (parkingSpot) {
+          if (parkingSpot.side === 'west') sidewalkPos.x -= 0.18;
+          else if (parkingSpot.side === 'east') sidewalkPos.x += 0.18;
+          else if (parkingSpot.side === 'north') sidewalkPos.z -= 0.18;
+          else if (parkingSpot.side === 'south') sidewalkPos.z += 0.18;
+        }
+        sidewalkPos.y = 0.018;
+
+        const frontDoorPos = building.worldCenter.clone().lerp(building.frontWorldPos, 0.45);
+        frontDoorPos.y = 0.018;
+
+        const houseGatePos = building.frontWorldPos.clone();
+        houseGatePos.y = 0.018;
+
+        // 5. 如果車內有多個人，應當依序下車而非同時 (設定交錯延遲時間)
+        for (let i = 0; i < newResidents.length; i++) {
+          const res = newResidents[i];
+          const pedestrian: MovingInPedestrian = {
+            id: `ped_${res.id}`,
+            buildingId: building.id,
+            profile: res,
+            spawnDelay: 0.35 + i * 1.1, // 每人相隔 1.1 秒依序下車
+            currentWaypointIndex: 1, // 起始點即為第0點，朝向第1點出發
+            waypoints: [
+              sidewalkPos.clone(),
+              houseGatePos.clone(),
+              frontDoorPos.clone(),
+            ],
+            speed: 0.95 + Math.random() * 0.15, // 自然步速約 1.0 m/s
+            walkTimer: Math.random() * 5.0,
+            isAlighted: false,
+            hasEnteredHouse: false,
+          };
+          this.activePedestrians.push(pedestrian);
+        }
+      },
+      !!parkingSpot
+    );
   }
 
   // ==========================================
@@ -1386,8 +1682,8 @@ export class BuildingManager {
           </div>
         </div>
         <div style="font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between;">
-          <span>剩餘時間:</span>
-          <span style="color: #f1f5f9;">${remaining.toFixed(1)} 秒</span>
+          <span>預計工期剩餘:</span>
+          <span style="color: #f1f5f9;">約 ${Math.round(remaining * 6)} 遊戲分鐘 (${(remaining / 10).toFixed(1)} 遊戲小時)</span>
         </div>
         <div style="font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; margin-top: 2px;">
           <span>規劃入住人數:</span>
@@ -1401,6 +1697,27 @@ export class BuildingManager {
         : (b.moveInStatus === 'waitingForRoad'
             ? '<span style="color: #ef4444;">⚠️ 等待聯外道路</span>'
             : '<span style="color: #38bdf8;">🚗 遷入中...</span>');
+
+      let residentsHtml = '';
+      if (b.residents && b.residents.length > 0) {
+        const listItems = b.residents.map((r) => {
+          const icon = r.gender === 'male' ? '👨' : '👩';
+          const genderText = r.gender === 'male' ? '男' : '女';
+          return `
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
+              <span style="color: #f1f5f9;">${icon} ${r.name}</span>
+              <span style="color: #94a3b8;">${genderText} · ${r.age}歲</span>
+            </div>
+          `;
+        }).join('');
+
+        residentsHtml = `
+          <div style="margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.08);">
+            <div style="color: #38bdf8; font-weight: bold; font-size: 11px; margin-bottom: 3px;">👥 入住市民個資:</div>
+            ${listItems}
+          </div>
+        `;
+      }
 
       this.tooltipElement.innerHTML = `
         <div style="font-weight: bold; font-size: 13px; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
@@ -1427,6 +1744,7 @@ export class BuildingManager {
           <span>正面朝向:</span>
           <span style="color: #22c55e;">正門面朝馬路</span>
         </div>
+        ${residentsHtml}
       `;
     }
   }

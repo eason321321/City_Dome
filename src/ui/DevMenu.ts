@@ -8,6 +8,8 @@ import { BuildingModelFactory } from '../rendering/BuildingModelFactory';
 import { BuildingManager } from '../systems/BuildingManager';
 import { ParkingManager } from '../simulation/ParkingManager';
 import { CitizenModelFactory, CitizenGender } from '../rendering/CitizenModelFactory';
+import { RoadMarkingFactory } from '../rendering/RoadMarkingFactory';
+import { TimeManager } from '../simulation/TimeManager';
 
 /**
  * 開發者工具箱 (DevMenu)
@@ -30,6 +32,7 @@ export class DevMenu {
   private vehicleManager: VehicleManager;
   private buildingManager: BuildingManager | null = null;
   private parkingManager: ParkingManager | null = null;
+  private timeManager: TimeManager | null = null;
 
   // UI 元素
   private toggleButton!: HTMLButtonElement;
@@ -68,6 +71,9 @@ export class DevMenu {
   private currentPreviewMesh: THREE.Group | null = null;
   private isAutoRotating: boolean = true;
   private currentModelId: string = 'car';
+  private isWalkAnimationActive: boolean = true;
+  private isWorldWalkActive: boolean = true;
+  private walkAnimTimer: number = 0;
 
   // 射線器
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
@@ -490,6 +496,23 @@ export class DevMenu {
             <button class="dev-action-btn secondary" id="dev-clear-cars-btn" style="width: 100%;">
               🗑️ 清除所有測試車輛
             </button>
+
+            <!-- 遊戲模擬速度倍率控制 -->
+            <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);">
+              <div class="dev-tool-title" style="margin-bottom: 4px;">
+                <span>⏱️ 遊戲模擬速度 (Game Speed)</span>
+                <span class="model-spec-badge" id="dev-speed-badge">0.75x</span>
+              </div>
+              <div class="dev-tool-desc" style="font-size: 11px; margin-bottom: 8px;">
+                調整模擬時間流速。車輛移動、市民走路、房屋建造速度與進度皆嚴格依遊戲虛擬時間等比例推進 (同速度之物體在 1 遊戲小時內位移完全恆定)。
+              </div>
+              <div class="dev-btn-row">
+                <button class="dev-action-btn secondary" id="dev-speed-075-btn">0.75x (慢速)</button>
+                <button class="dev-action-btn secondary" id="dev-speed-1-btn">1.0x (標準)</button>
+                <button class="dev-action-btn secondary" id="dev-speed-2-btn">2.0x (快速)</button>
+                <button class="dev-action-btn secondary" id="dev-speed-3-btn">3.0x (極速)</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -508,7 +531,11 @@ export class DevMenu {
               <optgroup label="交通載具">
                 <option value="car">🚗 現代自用轎車 (Passenger Vehicle)</option>
               </optgroup>
-              <optgroup label="市民模型 (依樣照風格與比例製作)">
+              <optgroup label="道路標線與路口引導線 (依樣照標準繪製)">
+                <option value="road_markings_showcase">🛣️ 路口行車導向標線與轉彎引導線展台 (Road Markings Showcase)</option>
+              </optgroup>
+              <optgroup label="市民模型 (依樣照風格與比例製作，支援走路動畫)">
+                <option value="citizen_walk_showcase">🚶 市民走路步態雙人展台 (Walking Animation Showcase)</option>
                 <option value="citizen_lineup">👥 人車比例對照展台 (Citizen & Car Lineup)</option>
                 <option value="citizen_male">👨 男性市民 (基礎款 / Casual Male #104)</option>
                 <option value="citizen_female">👩 女性市民 (優雅洋裝款 / Chic Dress #110)</option>
@@ -516,11 +543,12 @@ export class DevMenu {
                 <option value="citizen_chic_female">👜 俏麗包包女 (Pastel Casual #107)</option>
               </optgroup>
               <optgroup label="低密度住宅模型 (正面朝向 +Z 馬路)">
-                <option value="Residential_2x2">🏡 低密度住宅 2x2 (2 人 / Two People)</option>
-                <option value="Residential_2x3">🏡 低密度住宅 2x3 (2 人 / 窄面寬深庭)</option>
-                <option value="Residential_3x2">🏡 低密度住宅 3x2 (2 人 / 寬面寬淺進)</option>
-                <option value="Residential_3x3">🏡 低密度住宅 3x3 (3 人 / 3p 雙層別墅)</option>
-                <option value="Residential_4x4">🏡 低密度住宅 4x4 (4 人 / 4p 豪華莊園)</option>
+                <option value="scale_showcase">🏘️ 住宅、市民與車輛 1:1 比例對照展台 (Scale Lineup)</option>
+                <option value="Residential_2x2">🏡 低密度住宅 2x2 (2 人 / 經典 L 型別墅)</option>
+                <option value="Residential_2x3">🏡 低密度住宅 2x3 (2 人 / 北歐單坡斜頂)</option>
+                <option value="Residential_3x2">🏡 低密度住宅 3x2 (2 人 / 西班牙陶瓦雙拱廊)</option>
+                <option value="Residential_3x3">🏡 低密度住宅 3x3 (3 人 / 雙層別墅附車道與陽台)</option>
+                <option value="Residential_4x4">🏡 低密度住宅 4x4 (4 人 / 包浩斯豪華車庫大宅)</option>
               </optgroup>
             </select>
 
@@ -534,6 +562,9 @@ export class DevMenu {
               </button>
               <button class="dev-action-btn secondary" id="dev-reset-view-btn">
                 📐 正面視角
+              </button>
+              <button class="dev-action-btn secondary active" id="dev-walk-anim-toggle-btn">
+                🚶 走路動畫: 開啟中
               </button>
             </div>
           </div>
@@ -584,9 +615,14 @@ export class DevMenu {
                 🚶 人行道隨機生成 8 位
               </button>
             </div>
-            <button class="dev-action-btn secondary" id="dev-clear-citizens-btn" style="width: 100%;">
-              🗑️ 清除所有測試市民
-            </button>
+            <div class="dev-btn-row">
+              <button class="dev-action-btn secondary active" id="dev-world-walk-toggle-btn" style="flex: 1;">
+                🚶 市民全體走路: 開啟
+              </button>
+              <button class="dev-action-btn secondary" id="dev-clear-citizens-btn" style="flex: 1;">
+                🗑️ 清除市民
+              </button>
+            </div>
           </div>
 
           <div class="dev-tool-card">
@@ -998,6 +1034,28 @@ export class DevMenu {
       this.modelHolder.rotation.y = 0; // 重設為正面面向 +Z
     });
 
+    // 5. 展台走路動畫控制
+    const walkAnimBtn = this.panelContainer.querySelector('#dev-walk-anim-toggle-btn') as HTMLButtonElement | null;
+    walkAnimBtn?.addEventListener('click', () => {
+      this.isWalkAnimationActive = !this.isWalkAnimationActive;
+      walkAnimBtn.textContent = this.isWalkAnimationActive ? '🚶 走路動畫: 開啟中' : '⏸️ 走路動畫: 已暫停';
+      walkAnimBtn.classList.toggle('active', this.isWalkAnimationActive);
+      if (!this.isWalkAnimationActive) {
+        CitizenModelFactory.resetAllCitizens(this.modelHolder);
+      }
+    });
+
+    // 6. 全體市民地圖走路動畫控制
+    const worldWalkBtn = this.panelContainer.querySelector('#dev-world-walk-toggle-btn') as HTMLButtonElement | null;
+    worldWalkBtn?.addEventListener('click', () => {
+      this.isWorldWalkActive = !this.isWorldWalkActive;
+      worldWalkBtn.textContent = this.isWorldWalkActive ? '🚶 市民全體走路: 開啟' : '⏸️ 市民全體走路: 暫停';
+      worldWalkBtn.classList.toggle('active', this.isWorldWalkActive);
+      if (!this.isWorldWalkActive) {
+        CitizenModelFactory.resetAllCitizens(this.citizenTestGroup);
+      }
+    });
+
     // --- 車輛測試相關按鈕綁定 ---
     const toggleTestBtn = this.panelContainer.querySelector('#dev-toggle-test-btn') as HTMLButtonElement;
     toggleTestBtn.addEventListener('click', () => {
@@ -1019,6 +1077,27 @@ export class DevMenu {
     const clearBtn = this.panelContainer.querySelector('#dev-clear-cars-btn') as HTMLButtonElement;
     clearBtn.addEventListener('click', () => {
       this.vehicleManager.clearAllVehicles();
+    });
+
+    // 模擬速度按鈕監聽
+    const speed075Btn = this.panelContainer.querySelector('#dev-speed-075-btn') as HTMLButtonElement;
+    speed075Btn?.addEventListener('click', () => {
+      this.timeManager?.setTimeScale(0.75);
+    });
+
+    const speed1Btn = this.panelContainer.querySelector('#dev-speed-1-btn') as HTMLButtonElement;
+    speed1Btn?.addEventListener('click', () => {
+      this.timeManager?.setTimeScale(1.0);
+    });
+
+    const speed2Btn = this.panelContainer.querySelector('#dev-speed-2-btn') as HTMLButtonElement;
+    speed2Btn?.addEventListener('click', () => {
+      this.timeManager?.setTimeScale(2.0);
+    });
+
+    const speed3Btn = this.panelContainer.querySelector('#dev-speed-3-btn') as HTMLButtonElement;
+    speed3Btn?.addEventListener('click', () => {
+      this.timeManager?.setTimeScale(3.0);
     });
 
     // 3D 視圖射線監聽
@@ -1089,6 +1168,31 @@ export class DevMenu {
       let featuresDesc: string[] = [];
 
       switch (modelId) {
+        case 'road_markings_showcase':
+          citizenMesh = RoadMarkingFactory.createShowcase();
+          titleName = '路口行車導向標線與轉彎引導線展台 (Road Markings Showcase)';
+          heightDesc = '長 1.4m × 寬 1.4m (三車道標準路面實體展示)';
+          styleDesc = '依遊戲內道路允許方向精準繪製之白色向量導向箭頭與圓弧轉彎引導虛線';
+          featuresDesc = [
+            '完全依據參考圖繪製：左轉專用標線箭頭、直行兼左轉複合箭頭、直行專用標線箭頭',
+            '路口多向擴充支援：直行兼右轉、左右轉雙向分流、三向全通標線箭頭',
+            '路口轉彎引導線：沿車道轉彎軌跡繪製之高辨識度純白圓弧虛線 (Turning Guide Dashes)',
+            '動態幾何吸附：依遊戲中實際道路相鄰拓撲與車道可通行方向即時生成，嚴格杜絕錯誤標線',
+          ];
+          break;
+        case 'citizen_walk_showcase':
+          citizenMesh = CitizenModelFactory.createWalkShowcase();
+          titleName = '市民走路步態雙人展台 (Walking Animation Showcase)';
+          heightDesc = '男高 0.178m / 女高 0.168m (男女共用人體工學動畫)';
+          styleDesc = '男女並肩於石板人行道，動態展示人體工學步態';
+          featuresDesc = [
+            '通用步態骨架：雙腿自然交替擺動 (±24°)，手臂反相擺臂 (±20°)',
+            '軀幹骨盆起伏：雙倍步頻垂直顛簸 (3.5mm)，模擬跨步重心起伏',
+            '重心轉向微搖：軀幹帶微幅自轉 (±2°) 與側傾 (±0.9°)，生動逼真',
+            '配件同步律動：女性手提包隨右手臂擺動同步前後自然擺盪',
+            '男女相同動畫：底層骨架標準化，同一套生物力學演算法通吃男女',
+          ];
+          break;
         case 'citizen_lineup':
           citizenMesh = CitizenModelFactory.createLineupShowcase();
           titleName = '市民與轎車 1:1 比例對照展台 (Lineup Showcase)';
@@ -1178,6 +1282,63 @@ export class DevMenu {
           ${featureItems}
         </div>
       `;
+    } else if (modelId === 'scale_showcase') {
+      const showcaseGroup = new THREE.Group();
+      showcaseGroup.name = 'HouseCitizenCar_ScaleShowcase';
+
+      // 1. 2x2 經典住宅實體
+      const houseMesh = BuildingModelFactory.createResidential_2x2();
+      houseMesh.position.set(0, 0, 0);
+      showcaseGroup.add(houseMesh);
+
+      // 2. 男性市民 (站立於大門前石板步道上，面向 +Z 軸)
+      const male = CitizenModelFactory.createMaleCitizen({ variant: 0, shirtColor: 0x60a5fa, pantsColor: 0x1e293b });
+      male.position.set(0.15, 0.03, 0.36);
+      male.rotation.y = 0;
+      showcaseGroup.add(male);
+
+      // 3. 女性市民 (站立於男性市民旁前庭草坪)
+      const female = CitizenModelFactory.createFemaleCitizen({ variant: 0, shirtColor: 0xf8fafc });
+      female.position.set(0.26, 0.03, 0.36);
+      female.rotation.y = 0;
+      showcaseGroup.add(female);
+
+      // 4. 自用轎車 (停放於前庭右側)
+      const car = VehicleModelFactory.createVehicle(0xdc2626);
+      car.position.set(-0.32, 0.03, 0.36);
+      car.rotation.y = 0;
+      showcaseGroup.add(car);
+
+      showcaseGroup.position.set(0, 0.08, 0);
+      this.currentPreviewMesh = showcaseGroup;
+      this.modelHolder.add(showcaseGroup);
+
+      specBox.innerHTML = `
+        <div class="dev-status-row">
+          <span class="dev-status-label">展台名稱:</span>
+          <span class="dev-status-val" style="color: #4ade80;">住宅、市民與車輛 1:1 比例展台</span>
+        </div>
+        <div class="dev-status-row">
+          <span class="dev-status-label">市民身高:</span>
+          <span class="dev-status-val">男 0.178m / 女 0.168m</span>
+        </div>
+        <div class="dev-status-row">
+          <span class="dev-status-label">玄關大門:</span>
+          <span class="dev-status-val" style="color: #fbbf24;">高 0.21m (淨空 3.2cm，步行自如)</span>
+        </div>
+        <div class="dev-status-row">
+          <span class="dev-status-label">一層簷高:</span>
+          <span class="dev-status-val">簷高 0.29m / 脊高 0.46m</span>
+        </div>
+        <div class="dev-status-row">
+          <span class="dev-status-label">車輛尺寸:</span>
+          <span class="dev-status-val">長 0.369m × 寬 0.198m × 高 0.142m</span>
+        </div>
+        <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 11px;">
+          <div style="color: #cbd5e1;">· 嚴格依據市民身高與車輛等比建模，符合真實世界人體工學比例</div>
+          <div style="color: #cbd5e1;">· 窗台高度約 0.08m (齊市民腰部)，白木柵欄高 0.085m</div>
+        </div>
+      `;
     } else {
       const buildingMesh = BuildingModelFactory.createBuildingById(modelId);
       if (buildingMesh) {
@@ -1201,7 +1362,7 @@ export class DevMenu {
           </div>
           <div class="dev-status-row">
             <span class="dev-status-label">地塊佔地:</span>
-            <span class="dev-status-val">面寬 ${meta.frontageWidth}m × 縱深 ${meta.lotDepth}m</span>
+            <span class="dev-status-val">面寬 ${meta.frontageWidth} 格 (${meta.frontageWidth * 0.5}m) × 縱深 ${meta.lotDepth} 格 (${meta.lotDepth * 0.5}m)</span>
           </div>
           <div class="dev-status-row">
             <span class="dev-status-label">居住人口:</span>
@@ -1216,6 +1377,20 @@ export class DevMenu {
           </div>
         `;
       }
+    }
+  }
+
+  public setTimeManager(tm: TimeManager): void {
+    this.timeManager = tm;
+    this.updateSpeedUI();
+    this.timeManager.onTimeScaleChange(() => this.updateSpeedUI());
+  }
+
+  private updateSpeedUI(): void {
+    if (!this.timeManager) return;
+    const badge = this.panelContainer.querySelector('#dev-speed-badge');
+    if (badge) {
+      badge.textContent = `${this.timeManager.getTimeScale()}x`;
     }
   }
 
@@ -1315,10 +1490,20 @@ export class DevMenu {
             const st = b.status === 'constructing'
               ? `<span style="color: #fbbf24;">建造中 (${Math.floor(b.constructionProgress * 100)}%)</span>`
               : `<span style="color: #4ade80;">入住 ${b.currentOccupants}/${b.registeredResidents}人</span>`;
+
+            let resInfo = '';
+            if (b.residents && b.residents.length > 0) {
+              const resSummary = b.residents.map((r) => `${r.gender === 'male' ? '👨' : '👩'}${r.name}(${r.age}歲)`).join('、');
+              resInfo = `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">👥 居民: <span style="color: #cbd5e1;">${resSummary}</span></div>`;
+            }
+
             return `
-              <div style="display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
-                <span style="color: #f1f5f9;">${b.metadata.name} (${b.lot.frontageWidth}x${b.lot.lotDepth})</span>
-                ${st}
+              <div style="padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="color: #f1f5f9; font-weight: 500;">${b.metadata.name} (${b.lot.frontageWidth}x${b.lot.lotDepth})</span>
+                  ${st}
+                </div>
+                ${resInfo}
               </div>
             `;
           })
@@ -1328,12 +1513,24 @@ export class DevMenu {
   }
 
   /**
-   * 每幀更新：驅動模型檢視展台之自動慢速 360° 旋轉、房屋需求資訊與路邊停車資訊即時刷新
+   * 每幀更新：驅動模型檢視展台旋轉、市民走路動畫、房屋需求資訊與路邊停車資訊即時刷新
    */
   public update(deltaTime: number): void {
     if (this.showroomGroup.visible && this.isAutoRotating) {
       this.modelHolder.rotation.y += 0.5 * deltaTime;
     }
+
+    // 驅動 3D 模型展台市民走路動畫
+    if (this.showroomGroup.visible && this.isWalkAnimationActive) {
+      this.walkAnimTimer += deltaTime;
+      CitizenModelFactory.animateAllCitizens(this.modelHolder, this.walkAnimTimer);
+    }
+
+    // 驅動城市地圖上已生成市民之走路動畫
+    if (this.isWorldWalkActive && this.citizenTestGroup.children.length > 0) {
+      CitizenModelFactory.animateAllCitizens(this.citizenTestGroup, this.walkAnimTimer);
+    }
+
     if (this.panelContainer.style.display === 'flex') {
       if (this.activeTab === 'housing') {
         this.updateHousingUI();
