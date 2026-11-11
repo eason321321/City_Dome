@@ -3,6 +3,15 @@ import { RoadNetwork, RoadTile } from './RoadNetwork';
 import { CameraManager } from '../rendering/CameraManager';
 
 export type ZoneType = 'None' | 'Residential';
+export type ZoningToolMode = 'brush' | 'box';
+
+export interface ZoningPreviewInfo {
+  isDragging: boolean;
+  widthCells: number;
+  depthCells: number;
+  cellCount: number;
+  mode: 'Residential' | 'Dezone';
+}
 
 export interface ZoningCell {
   key: string;             // "zx,zz" e.g. "24,48"
@@ -43,8 +52,26 @@ export class ZoningManager {
   // 互動狀態
   private isToolActive: boolean = false;
   private currentMode: 'Residential' | 'Dezone' = 'Residential';
+  private toolMode: ZoningToolMode = 'brush';
   private isMouseDown: boolean = false;
   private currentMouseButton: number = 0; // 0: 左鍵, 2: 右鍵
+
+  // 框選專用狀態
+  private isBoxDragging: boolean = false;
+  private boxStartZx: number = 0;
+  private boxStartZz: number = 0;
+  private boxStartHit: THREE.Vector3 = new THREE.Vector3();
+  private boxCurrentZx: number = 0;
+  private boxCurrentZz: number = 0;
+  private boxCurrentHit: THREE.Vector3 = new THREE.Vector3();
+
+  // 框選專用 3D 視覺物件
+  private boxFillMesh: THREE.Mesh;
+  private boxOutlineLine: THREE.LineLoop;
+  private boxFillMatResidential: THREE.MeshBasicMaterial;
+  private boxFillMatDezone: THREE.MeshBasicMaterial;
+  private boxBorderMatResidential: THREE.LineBasicMaterial;
+  private boxBorderMatDezone: THREE.LineBasicMaterial;
 
   // 射線與碰撞平面
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
@@ -58,6 +85,7 @@ export class ZoningManager {
 
   // 外部狀態回調
   private onToolClosed?: () => void;
+  private previewCallback?: ((info: ZoningPreviewInfo | null) => void) | null;
 
   constructor(
     scene: THREE.Scene,
@@ -118,6 +146,59 @@ export class ZoningManager {
     this.hoverBrushMesh.visible = false;
     this.zoningContainer.add(this.hoverBrushMesh);
 
+    // 3. 框選大面積劃分專用材質與視覺物件
+    this.boxFillMatResidential = new THREE.MeshBasicMaterial({
+      color: 0x22c55e,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    this.boxFillMatDezone = new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    this.boxBorderMatResidential = new THREE.LineBasicMaterial({
+      color: 0x86efac, // 明亮淺螢光綠
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    });
+
+    this.boxBorderMatDezone = new THREE.LineBasicMaterial({
+      color: 0xfca5a5, // 明亮淺警示紅
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    });
+
+    // 框選 1x1 基礎平面，動態縮放以配合任何框選矩形
+    const boxBaseGeo = new THREE.PlaneGeometry(1, 1);
+    this.boxFillMesh = new THREE.Mesh(boxBaseGeo, this.boxFillMatResidential);
+    this.boxFillMesh.rotation.x = -Math.PI / 2;
+    this.boxFillMesh.position.y = 0.034;
+    this.boxFillMesh.renderOrder = 10;
+    this.boxFillMesh.visible = false;
+
+    // 框選四邊輪廓線 (LineLoop)
+    const borderPoints = [
+      new THREE.Vector3(-0.5, -0.5, 0.002),
+      new THREE.Vector3(0.5, -0.5, 0.002),
+      new THREE.Vector3(0.5, 0.5, 0.002),
+      new THREE.Vector3(-0.5, 0.5, 0.002),
+    ];
+    const borderGeo = new THREE.BufferGeometry().setFromPoints(borderPoints);
+    this.boxOutlineLine = new THREE.LineLoop(borderGeo, this.boxBorderMatResidential);
+    this.boxOutlineLine.renderOrder = 11;
+    this.boxFillMesh.add(this.boxOutlineLine);
+
+    this.zoningContainer.add(this.boxFillMesh);
+
     // 初始化事件與初始路網掃描
     this.bindEvents();
     this.rebuildZoningGrid();
@@ -127,12 +208,27 @@ export class ZoningManager {
     this.onToolClosed = cb;
   }
 
+  public setPreviewCallback(cb: (info: ZoningPreviewInfo | null) => void): void {
+    this.previewCallback = cb;
+  }
+
   public getIsToolActive(): boolean {
     return this.isToolActive;
   }
 
   public getCurrentMode(): 'Residential' | 'Dezone' {
     return this.currentMode;
+  }
+
+  public getToolMode(): ZoningToolMode {
+    return this.toolMode;
+  }
+
+  public setToolMode(mode: ZoningToolMode): void {
+    if (this.toolMode === mode) return;
+    this.cancelBoxDrag();
+    this.toolMode = mode;
+    this.updateHoverBrushMaterial();
   }
 
   public getCells(): Map<string, ZoningCell> {
@@ -155,6 +251,7 @@ export class ZoningManager {
     this.isToolActive = active;
     this.currentMode = mode;
     this.isMouseDown = false;
+    this.cancelBoxDrag();
 
     // 開啟時停用 RTS 相機左鍵拖曳，使滑鼠左鍵可用於塗抹劃分
     this.cameraManager.setLeftDragEnabled(!active);
@@ -165,8 +262,12 @@ export class ZoningManager {
     }
     this.fillGroup.visible = active;
     this.hoverBrushMesh.visible = false;
+    if (this.boxFillMesh) {
+      this.boxFillMesh.visible = false;
+    }
 
     this.updateHoverBrushMaterial();
+    this.updateBoxMaterials();
   }
 
   /**
@@ -175,11 +276,82 @@ export class ZoningManager {
   public setZoneMode(mode: 'Residential' | 'Dezone'): void {
     this.currentMode = mode;
     this.updateHoverBrushMaterial();
+    this.updateBoxMaterials();
   }
 
   private updateHoverBrushMaterial(): void {
     this.hoverBrushMesh.material =
       this.currentMode === 'Residential' ? this.hoverMatResidential : this.hoverMatDezone;
+  }
+
+  private updateBoxMaterials(): void {
+    if (!this.boxFillMesh || !this.boxOutlineLine) return;
+    const isRes = this.currentMode === 'Residential';
+    this.boxFillMesh.material = isRes ? this.boxFillMatResidential : this.boxFillMatDezone;
+    this.boxOutlineLine.material = isRes ? this.boxBorderMatResidential : this.boxBorderMatDezone;
+  }
+
+  /**
+   * 取消當前框選作業並隱藏視覺效果
+   */
+  public cancelBoxDrag(): void {
+    this.isBoxDragging = false;
+    if (this.boxFillMesh) {
+      this.boxFillMesh.visible = false;
+    }
+    if (this.previewCallback) {
+      this.previewCallback(null);
+    }
+  }
+
+  /**
+   * 根據起點與當前點計算框選空間尺寸並更新 3D 視覺變換
+   */
+  private updateBoxTransform(): void {
+    const minZx = Math.min(this.boxStartZx, this.boxCurrentZx);
+    const maxZx = Math.max(this.boxStartZx, this.boxCurrentZx);
+    const minZz = Math.min(this.boxStartZz, this.boxCurrentZz);
+    const maxZz = Math.max(this.boxStartZz, this.boxCurrentZz);
+
+    const minX = minZx * this.CELL_SIZE;
+    const maxX = (maxZx + 1) * this.CELL_SIZE;
+    const minZ = minZz * this.CELL_SIZE;
+    const maxZ = (maxZz + 1) * this.CELL_SIZE;
+
+    const width = Math.max(0.01, maxX - minX);
+    const depth = Math.max(0.01, maxZ - minZ);
+    const centerX = (minX + maxX) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+
+    this.boxFillMesh.position.set(centerX, 0.034, centerZ);
+    this.boxFillMesh.scale.set(width, depth, 1);
+  }
+
+  /**
+   * 送出框選結果：對框選範圍內所有路側有效分區格位統一賦予用途或清除
+   */
+  private commitBoxSelection(): void {
+    if (!this.isBoxDragging) return;
+
+    const minZx = Math.min(this.boxStartZx, this.boxCurrentZx);
+    const maxZx = Math.max(this.boxStartZx, this.boxCurrentZx);
+    const minZz = Math.min(this.boxStartZz, this.boxCurrentZz);
+    const maxZz = Math.max(this.boxStartZz, this.boxCurrentZz);
+
+    const targetType: ZoneType = this.currentMode === 'Residential' ? 'Residential' : 'None';
+
+    for (let zx = minZx; zx <= maxZx; zx++) {
+      for (let zz = minZz; zz <= maxZz; zz++) {
+        const key = `${zx},${zz}`;
+        const cell = this.cells.get(key);
+        if (cell && cell.zoneType !== targetType) {
+          cell.zoneType = targetType;
+          this.createOrUpdateCellMesh(cell);
+        }
+      }
+    }
+
+    this.cancelBoxDrag();
   }
 
   /**
@@ -446,76 +618,190 @@ export class ZoningManager {
   }
 
   private bindEvents(): void {
-    // 1. 滑鼠移動：懸浮吸附高亮與拖曳塗抹
-    this.domElement.addEventListener('mousemove', (e: MouseEvent) => {
+    // 1. 滑鼠移動：塗抹模式連續指派 / 框選模式動態拉伸矩形與統計
+    window.addEventListener('mousemove', (e: MouseEvent) => {
       if (!this.isToolActive) return;
 
       const hit = this.getMouseGroundIntersection(e);
       if (!hit) {
-        this.hoverBrushMesh.visible = false;
+        if (!this.isBoxDragging) {
+          this.hoverBrushMesh.visible = false;
+        }
         return;
       }
 
-      const zx = Math.floor(hit.x / this.CELL_SIZE);
-      const zz = Math.floor(hit.z / this.CELL_SIZE);
-      const key = `${zx},${zz}`;
+      if (this.toolMode === 'box') {
+        if (this.isBoxDragging) {
+          this.hoverBrushMesh.visible = false;
+          this.boxCurrentZx = Math.floor(hit.x / this.CELL_SIZE);
+          this.boxCurrentZz = Math.floor(hit.z / this.CELL_SIZE);
+          this.boxCurrentHit.copy(hit);
+          this.updateBoxTransform();
 
-      const cell = this.cells.get(key);
-      if (cell) {
-        this.hoverBrushMesh.visible = true;
-        this.hoverBrushMesh.position.set(cell.worldX, 0.032, cell.worldZ);
+          const minZx = Math.min(this.boxStartZx, this.boxCurrentZx);
+          const maxZx = Math.max(this.boxStartZx, this.boxCurrentZx);
+          const minZz = Math.min(this.boxStartZz, this.boxCurrentZz);
+          const maxZz = Math.max(this.boxStartZz, this.boxCurrentZz);
+          const widthCells = maxZx - minZx + 1;
+          const depthCells = maxZz - minZz + 1;
 
-        // 若滑鼠按下中，執行連續拖曳塗抹
-        if (this.isMouseDown) {
-          if (this.currentMouseButton === 2) {
-            // 右鍵拖曳：清除分區
-            this.applyZoningAtWorldPos(hit.x, hit.z, 'None');
+          let cellCount = 0;
+          for (let zx = minZx; zx <= maxZx; zx++) {
+            for (let zz = minZz; zz <= maxZz; zz++) {
+              if (this.cells.has(`${zx},${zz}`)) {
+                cellCount++;
+              }
+            }
+          }
+
+          if (this.previewCallback) {
+            this.previewCallback({
+              isDragging: true,
+              widthCells,
+              depthCells,
+              cellCount,
+              mode: this.currentMode,
+            });
+          }
+        } else {
+          // 未拖曳狀態：指示游標所在之 0.5m 分區小格
+          const zx = Math.floor(hit.x / this.CELL_SIZE);
+          const zz = Math.floor(hit.z / this.CELL_SIZE);
+          const cell = this.cells.get(`${zx},${zz}`);
+          if (cell) {
+            this.hoverBrushMesh.visible = true;
+            this.hoverBrushMesh.position.set(cell.worldX, 0.032, cell.worldZ);
           } else {
-            // 左鍵拖曳：依當前模式塗抹
-            this.applyZoningAtWorldPos(hit.x, hit.z);
+            this.hoverBrushMesh.visible = false;
           }
         }
       } else {
-        this.hoverBrushMesh.visible = false;
+        // 塗抹模式 (Brush)
+        const zx = Math.floor(hit.x / this.CELL_SIZE);
+        const zz = Math.floor(hit.z / this.CELL_SIZE);
+        const cell = this.cells.get(`${zx},${zz}`);
+
+        if (cell) {
+          this.hoverBrushMesh.visible = true;
+          this.hoverBrushMesh.position.set(cell.worldX, 0.032, cell.worldZ);
+
+          // 若滑鼠按下中，執行連續拖曳塗抹
+          if (this.isMouseDown) {
+            if (this.currentMouseButton === 2) {
+              // 右鍵拖曳：清除分區
+              this.applyZoningAtWorldPos(hit.x, hit.z, 'None');
+            } else {
+              // 左鍵拖曳：依當前模式塗抹
+              this.applyZoningAtWorldPos(hit.x, hit.z);
+            }
+          }
+        } else {
+          this.hoverBrushMesh.visible = false;
+        }
       }
     });
 
-    // 2. 滑鼠按下：立即塗抹
+    // 2. 滑鼠按下：塗抹模式立即塗抹 / 框選模式確立起始角點
     this.domElement.addEventListener('mousedown', (e: MouseEvent) => {
       if (!this.isToolActive) return;
 
-      if (e.button === 0 || e.button === 2) {
-        this.isMouseDown = true;
-        this.currentMouseButton = e.button;
+      if (this.toolMode === 'box') {
+        if (e.button === 0) {
+          // 左鍵：開始框選
+          const hit = this.getMouseGroundIntersection(e);
+          if (hit) {
+            this.isBoxDragging = true;
+            this.boxStartZx = Math.floor(hit.x / this.CELL_SIZE);
+            this.boxStartZz = Math.floor(hit.z / this.CELL_SIZE);
+            this.boxStartHit.copy(hit);
+            this.boxCurrentZx = this.boxStartZx;
+            this.boxCurrentZz = this.boxStartZz;
+            this.boxCurrentHit.copy(hit);
 
-        const hit = this.getMouseGroundIntersection(e);
-        if (hit) {
-          if (e.button === 2) {
-            this.applyZoningAtWorldPos(hit.x, hit.z, 'None');
+            this.hoverBrushMesh.visible = false;
+            this.updateBoxMaterials();
+            this.updateBoxTransform();
+            this.boxFillMesh.visible = true;
+
+            const initialCount = this.cells.has(`${this.boxStartZx},${this.boxStartZz}`) ? 1 : 0;
+            if (this.previewCallback) {
+              this.previewCallback({
+                isDragging: true,
+                widthCells: 1,
+                depthCells: 1,
+                cellCount: initialCount,
+                mode: this.currentMode,
+              });
+            }
+          }
+        } else if (e.button === 2) {
+          // 右鍵：若正在框選中則立即取消；否則單擊清除游標下分區
+          if (this.isBoxDragging) {
+            e.preventDefault();
+            e.stopPropagation();
+            this.cancelBoxDrag();
           } else {
-            this.applyZoningAtWorldPos(hit.x, hit.z);
+            const hit = this.getMouseGroundIntersection(e);
+            if (hit) {
+              this.applyZoningAtWorldPos(hit.x, hit.z, 'None');
+            }
+          }
+        }
+      } else {
+        // 塗抹模式 (Brush)
+        if (e.button === 0 || e.button === 2) {
+          this.isMouseDown = true;
+          this.currentMouseButton = e.button;
+
+          const hit = this.getMouseGroundIntersection(e);
+          if (hit) {
+            if (e.button === 2) {
+              this.applyZoningAtWorldPos(hit.x, hit.z, 'None');
+            } else {
+              this.applyZoningAtWorldPos(hit.x, hit.z);
+            }
           }
         }
       }
     });
 
-    // 3. 滑鼠放開
-    window.addEventListener('mouseup', () => {
-      if (this.isMouseDown) {
-        this.isMouseDown = false;
+    // 3. 滑鼠放開：框選模式批次送出用途 / 塗抹模式停止塗抹
+    window.addEventListener('mouseup', (e: MouseEvent) => {
+      if (!this.isToolActive) return;
+
+      if (this.toolMode === 'box') {
+        if (this.isBoxDragging && e.button === 0) {
+          this.commitBoxSelection();
+        }
+      } else {
+        if (this.isMouseDown) {
+          this.isMouseDown = false;
+        }
       }
     });
 
-    // 4. 禁用劃分狀態下的右鍵選單
+    // 4. 視窗失焦防禦
+    window.addEventListener('blur', () => {
+      if (this.isBoxDragging) {
+        this.cancelBoxDrag();
+      }
+      this.isMouseDown = false;
+    });
+
+    // 5. 禁用劃分狀態下的右鍵選單
     this.domElement.addEventListener('contextmenu', (e: MouseEvent) => {
       if (this.isToolActive) {
         e.preventDefault();
       }
     });
 
-    // 5. 鍵盤 ESC 退出工具
+    // 6. 鍵盤 ESC 退出框選或退出工具
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape' && this.isToolActive) {
+        if (this.isBoxDragging) {
+          this.cancelBoxDrag();
+          return;
+        }
         this.setToolActive(false);
         if (this.onToolClosed) {
           this.onToolClosed();

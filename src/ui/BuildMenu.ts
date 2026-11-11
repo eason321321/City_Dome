@@ -1,12 +1,13 @@
 import { RoadManager } from '../systems/RoadManager';
-import { ZoningManager } from '../systems/ZoningManager';
+import { ZoningManager, ZoningPreviewInfo, ZoningToolMode } from '../systems/ZoningManager';
 
 /**
  * 建造與土地規劃選單管理器 (BuildMenu)
  * 位於畫面左下方，具備多分類擴充架構。
  * 目前提供：
  * 1. 土地劃分分類按鈕（綠色分區圖標，位於左側）
- *    - 土地分區子選單：低密度住宅區 (Residential Zone)、清除土地劃分 (Dezone)
+ *    - 土地分區子選單：模式切換（塗抹模式 / 框選模式）
+ *    - 分區用途卡片：低密度住宅區 (Residential Zone)、清除土地劃分 (Dezone)
  * 2. 道路建造分類按鈕（道路圖標，往右配置）
  *    - 雙向二線道卡片（包含兩側立體高架人行道）
  * 3. 懸浮上方一致性規格面板與不擋視線之操作說明氣泡
@@ -22,6 +23,7 @@ export class BuildMenu {
 
   private isZoningMenuOpen: boolean = false;
   private currentZoningMode: 'Residential' | 'Dezone' = 'Residential';
+  private currentZoningToolMode: ZoningToolMode = 'brush';
 
   // DOM 參照 - 分類導航
   private zoningCategoryBtn!: HTMLButtonElement;
@@ -34,6 +36,8 @@ export class BuildMenu {
 
   // DOM 參照 - 土地劃分選單
   private zoningSubMenuPanel!: HTMLDivElement;
+  private brushModeTab!: HTMLButtonElement;
+  private boxModeTab!: HTMLButtonElement;
   private residentialCard!: HTMLDivElement;
   private dezoneCard!: HTMLDivElement;
 
@@ -56,6 +60,11 @@ export class BuildMenu {
     // 監聽 ZoningManager 被 ESC 等關閉的事件
     this.zoningManager.setToolClosedCallback(() => {
       this.closeZoningTool();
+    });
+
+    // 監聽 ZoningManager 框選即時預覽回調
+    this.zoningManager.setPreviewCallback((previewInfo) => {
+      this.updateZoningPreview(previewInfo);
     });
 
     // 掛載至 ui-overlay
@@ -172,6 +181,43 @@ export class BuildMenu {
         padding: 2px 6px 4px 6px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         text-transform: uppercase;
+      }
+
+      /* 分區工具操作模式切換列 (塗抹 / 框選) */
+      .zoning-tool-mode-bar {
+        display: flex;
+        gap: 6px;
+        margin: 2px 0 4px 0;
+      }
+
+      .zoning-mode-tab {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 6px 8px;
+        background: rgba(30, 26, 38, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        color: #94a3b8;
+        font-size: 11.5px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .zoning-mode-tab:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #f1f5f9;
+        border-color: rgba(255, 255, 255, 0.22);
+      }
+
+      .zoning-mode-tab.active {
+        background: rgba(34, 197, 94, 0.22);
+        border-color: #22c55e;
+        color: #4ade80;
+        box-shadow: 0 0 10px rgba(34, 197, 94, 0.28);
       }
 
       /* 項目卡片 */
@@ -404,6 +450,25 @@ export class BuildMenu {
       <div class="build-submenu-panel zoning-submenu-panel">
         <div class="submenu-title">土地分區規劃</div>
 
+        <!-- 分區操作模式切換列 (塗抹 / 框選) -->
+        <div class="zoning-tool-mode-bar">
+          <button class="zoning-mode-tab brush-mode-tab active" type="button" title="筆刷塗抹模式：點擊或滑動滑鼠單格劃分">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+              <path d="M2 2l7.586 7.586"/>
+              <circle cx="11" cy="11" r="2"/>
+            </svg>
+            <span>塗抹模式</span>
+          </button>
+          <button class="zoning-mode-tab box-mode-tab" type="button" title="區域框選模式：按住滑鼠拖曳矩形，批次指定範圍用途">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/>
+            </svg>
+            <span>框選模式</span>
+          </button>
+        </div>
+
         <!-- 住宅區卡片 (預設綠色) -->
         <div class="build-item-card zoning-card residential-card selected green-card">
           <div class="build-item-icon" style="background: rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.35);">
@@ -416,7 +481,7 @@ export class BuildMenu {
           <div class="build-item-details">
             <span class="build-item-name" style="color: #4ade80;">低密度住宅區</span>
             <div class="build-item-meta">
-              <span>點選或拖曳劃分 · 綠色</span>
+              <span class="zoning-desc">點選或拖曳劃分 · 綠色</span>
             </div>
           </div>
         </div>
@@ -433,7 +498,7 @@ export class BuildMenu {
           <div class="build-item-details">
             <span class="build-item-name">清除分區</span>
             <div class="build-item-meta">
-              <span>右鍵或點此塗抹清除</span>
+              <span class="zoning-desc">右鍵或點此塗抹清除</span>
             </div>
           </div>
         </div>
@@ -479,9 +544,8 @@ export class BuildMenu {
               <rect x="2" y="2" width="20" height="20" rx="3" fill="#22252a" stroke="#475569" stroke-width="1.2"/>
               <rect x="2" y="2" width="4" height="20" fill="#94a3b8"/>
               <rect x="18" y="2" width="4" height="20" fill="#94a3b8"/>
-              <line x1="12" y1="4" x2="12" y2="8" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
-              <line x1="12" y1="11" x2="12" y2="15" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
-              <line x1="12" y1="18" x2="12" y2="22" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+              <line x1="10.8" y1="3" x2="10.8" y2="21" stroke="#f59e0b" stroke-width="1.1"/>
+              <line x1="13.2" y1="3" x2="13.2" y2="21" stroke="#f59e0b" stroke-width="1.1"/>
             </svg>
           </div>
           <div class="build-item-details">
@@ -522,6 +586,8 @@ export class BuildMenu {
     this.roadCategoryBtn = this.container.querySelector('.road-category-btn') as HTMLButtonElement;
 
     this.zoningSubMenuPanel = this.container.querySelector('.zoning-submenu-panel') as HTMLDivElement;
+    this.brushModeTab = this.container.querySelector('.brush-mode-tab') as HTMLButtonElement;
+    this.boxModeTab = this.container.querySelector('.box-mode-tab') as HTMLButtonElement;
     this.residentialCard = this.container.querySelector('.residential-card') as HTMLDivElement;
     this.dezoneCard = this.container.querySelector('.dezone-card') as HTMLDivElement;
 
@@ -552,17 +618,26 @@ export class BuildMenu {
       }
     });
 
-    // 2. 點擊「住宅區」分區卡片
+    // 2. 土地劃分模式切換（塗抹 vs 框選）
+    this.brushModeTab.addEventListener('click', () => {
+      this.setZoningToolMode('brush');
+    });
+
+    this.boxModeTab.addEventListener('click', () => {
+      this.setZoningToolMode('box');
+    });
+
+    // 3. 點擊「住宅區」分區卡片
     this.residentialCard.addEventListener('click', () => {
       this.setZoningMode('Residential');
     });
 
-    // 3. 點擊「清除劃分」卡片
+    // 4. 點擊「清除劃分」卡片
     this.dezoneCard.addEventListener('click', () => {
       this.setZoningMode('Dezone');
     });
 
-    // 4. 點擊「道路建造」分類按鈕
+    // 5. 點擊「道路建造」分類按鈕
     this.roadCategoryBtn.addEventListener('click', () => {
       this.isRoadMenuOpen = !this.isRoadMenuOpen;
       if (this.isRoadMenuOpen) {
@@ -574,7 +649,7 @@ export class BuildMenu {
       }
     });
 
-    // 5. 道路規格說明懸浮
+    // 6. 道路規格說明懸浮
     this.twoLaneCard.addEventListener('mouseenter', () => {
       this.roadSpecCard.classList.add('visible');
     });
@@ -583,7 +658,7 @@ export class BuildMenu {
       this.roadSpecCard.classList.remove('visible');
     });
 
-    // 6. 點擊「雙向二線道」卡片
+    // 7. 點擊「雙向二線道」卡片
     this.twoLaneCard.addEventListener('click', () => {
       if (this.isTwoLaneSelected) {
         this.deselectRoadTool();
@@ -592,7 +667,7 @@ export class BuildMenu {
       }
     });
 
-    // 7. 訂閱 RoadManager 建造預覽
+    // 8. 訂閱 RoadManager 建造預覽
     this.roadManager.setTreasuryCallbacks(
       (newTreasury) => {
         void newTreasury;
@@ -613,7 +688,7 @@ export class BuildMenu {
       }
     );
 
-    // 8. 鍵盤 ESC
+    // 9. 鍵盤快速鍵：ESC 退出 / Tab 切換分區劃分模式
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (this.isTwoLaneSelected) {
@@ -621,10 +696,13 @@ export class BuildMenu {
         } else if (this.isZoningMenuOpen) {
           this.closeZoningTool();
         }
+      } else if (e.key === 'Tab' && this.isZoningMenuOpen) {
+        e.preventDefault();
+        this.toggleZoningToolMode();
       }
     });
 
-    // 9. 滑鼠右鍵取消建造狀態
+    // 10. 滑鼠右鍵取消建造狀態
     window.addEventListener('mousedown', (e: MouseEvent) => {
       if (e.button === 2 && this.isTwoLaneSelected) {
         setTimeout(() => {
@@ -642,6 +720,7 @@ export class BuildMenu {
     this.isZoningMenuOpen = true;
     this.currentZoningMode = mode;
     this.zoningManager.setToolActive(true, mode);
+    this.zoningManager.setToolMode(this.currentZoningToolMode);
     this.updateZoningUI();
   }
 
@@ -657,27 +736,119 @@ export class BuildMenu {
     this.updateZoningUI();
   }
 
+  private setZoningToolMode(toolMode: ZoningToolMode): void {
+    this.currentZoningToolMode = toolMode;
+    this.zoningManager.setToolMode(toolMode);
+    this.updateZoningUI();
+  }
+
+  private toggleZoningToolMode(): void {
+    const nextMode: ZoningToolMode = this.currentZoningToolMode === 'brush' ? 'box' : 'brush';
+    this.setZoningToolMode(nextMode);
+  }
+
+  /**
+   * 根據土地分區即時框選資訊，動態更新操作說明氣泡
+   */
+  private updateZoningPreview(previewInfo: ZoningPreviewInfo | null): void {
+    if (!this.isZoningMenuOpen) return;
+
+    if (previewInfo && previewInfo.isDragging) {
+      if (previewInfo.mode === 'Residential') {
+        this.instructionBadgeSpan.className = 'pill-badge green';
+        this.instructionBadgeSpan.textContent = '住宅區框選中';
+        if (previewInfo.cellCount > 0) {
+          this.instructionTextSpan.innerHTML = `
+            正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（<span class="pill-cost-highlight">${previewInfo.cellCount} 格路側分區</span>）· 放開滑鼠以指派用途 · 右鍵取消
+          `;
+        } else {
+          this.instructionTextSpan.innerHTML = `
+            正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（<span class="pill-cost-invalid">無路側分區格位</span>）· 右鍵取消
+          `;
+        }
+      } else {
+        this.instructionBadgeSpan.className = 'pill-badge red';
+        this.instructionBadgeSpan.textContent = '框選清除中';
+        if (previewInfo.cellCount > 0) {
+          this.instructionTextSpan.innerHTML = `
+            正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（<span class="pill-cost-invalid">${previewInfo.cellCount} 格分區將被清除</span>）· 放開滑鼠以清除 · 右鍵取消
+          `;
+        } else {
+          this.instructionTextSpan.innerHTML = `
+            正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（無分區格位）· 右鍵取消
+          `;
+        }
+      }
+    } else {
+      this.refreshZoningInstruction();
+    }
+  }
+
+  /**
+   * 刷新土地劃分常規說明文字
+   */
+  private refreshZoningInstruction(): void {
+    if (!this.isZoningMenuOpen) return;
+
+    if (this.currentZoningToolMode === 'box') {
+      if (this.currentZoningMode === 'Residential') {
+        this.instructionBadgeSpan.className = 'pill-badge green';
+        this.instructionBadgeSpan.textContent = '住宅區框選';
+        this.instructionTextSpan.textContent =
+          '按住滑鼠左鍵拖曳拉出矩形，放開即可批次指定【住宅區】 · 右鍵取消 · ESC 退出';
+      } else {
+        this.instructionBadgeSpan.className = 'pill-badge red';
+        this.instructionBadgeSpan.textContent = '框選清除';
+        this.instructionTextSpan.textContent =
+          '按住滑鼠左鍵拖曳拉出矩形，放開即可批次清除分區 · 右鍵取消 · ESC 退出';
+      }
+    } else {
+      if (this.currentZoningMode === 'Residential') {
+        this.instructionBadgeSpan.className = 'pill-badge green';
+        this.instructionBadgeSpan.textContent = '住宅區劃分';
+        this.instructionTextSpan.textContent =
+          '滑鼠左鍵點選或拖曳指派【綠色住宅區】 · 右鍵塗抹清除 · ESC 退出';
+      } else {
+        this.instructionBadgeSpan.className = 'pill-badge red';
+        this.instructionBadgeSpan.textContent = '清除分區';
+        this.instructionTextSpan.textContent =
+          '滑鼠左鍵或右鍵塗抹清除土地分區 · ESC 退出';
+      }
+    }
+  }
+
   private updateZoningUI(): void {
     if (this.isZoningMenuOpen) {
       this.zoningCategoryBtn.classList.add('active', 'green-btn');
       this.zoningSubMenuPanel.classList.add('open');
       this.instructionPill.classList.add('active');
 
+      // 更新模式切換 Tab 按鈕外觀
+      this.brushModeTab.classList.toggle('active', this.currentZoningToolMode === 'brush');
+      this.boxModeTab.classList.toggle('active', this.currentZoningToolMode === 'box');
+
+      // 更新卡片說明文字
+      const resMetaDesc = this.residentialCard.querySelector('.zoning-desc');
+      const dezoneMetaDesc = this.dezoneCard.querySelector('.zoning-desc');
+
+      if (this.currentZoningToolMode === 'box') {
+        if (resMetaDesc) resMetaDesc.textContent = '拖曳矩形框選批次指定 · 綠色';
+        if (dezoneMetaDesc) dezoneMetaDesc.textContent = '拖曳矩形框選批次清除';
+      } else {
+        if (resMetaDesc) resMetaDesc.textContent = '點選或拖曳劃分 · 綠色';
+        if (dezoneMetaDesc) dezoneMetaDesc.textContent = '右鍵或點此塗抹清除';
+      }
+
+      // 卡片選取高亮狀態
       if (this.currentZoningMode === 'Residential') {
         this.residentialCard.classList.add('selected', 'green-card');
         this.dezoneCard.classList.remove('selected');
-        this.instructionBadgeSpan.className = 'pill-badge green';
-        this.instructionBadgeSpan.textContent = '住宅區劃分';
-        this.instructionTextSpan.textContent =
-          '滑鼠左鍵點選或拖曳指派【綠色住宅區】 · 右鍵塗抹清除 · ESC 退出';
       } else {
         this.residentialCard.classList.remove('selected', 'green-card');
         this.dezoneCard.classList.add('selected');
-        this.instructionBadgeSpan.className = 'pill-badge red';
-        this.instructionBadgeSpan.textContent = '清除分區';
-        this.instructionTextSpan.textContent =
-          '滑鼠左鍵或右鍵塗抹清除土地分區 · ESC 退出';
       }
+
+      this.refreshZoningInstruction();
     } else {
       this.zoningCategoryBtn.classList.remove('active', 'green-btn');
       this.zoningSubMenuPanel.classList.remove('open');

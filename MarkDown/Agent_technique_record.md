@@ -92,9 +92,9 @@ $$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
   - **瀝青顆粒基底**：`#22252a` 搭配動態常態分佈顆粒雜訊（$\pm 16$ 灰度微擾）。
   - **兩側路緣石（Curbs）**：混凝土邊界（寬 $18\text{px}$，`#3e4451`）。
   - **兩側霧線邊界（Fog Lines）**：純白實線（寬 $8\text{px}$，`#f1f5f9`）。
-  - **中央雙向分道線**：鮮亮黃色虛線（`#f59e0b`，寬 $10\text{px}$），採用 $40\text{px}$ 實線與 $24\text{px}$ 留白循環：
-    $$\frac{512}{40 + 24} = 8\text{ 個完整循環}$$
-    確保跨相鄰路段網格接縫時，中央虛線達到完美連續性。
+  - **中央行車分向限制線**：標準鮮亮雙黃實線（`#f59e0b`，線寬 $8\text{px}$，中心軸分別位於 $X = 247\text{px}$ 與 $X = 265\text{px}$，瀝青間隔 $10\text{px}$）：
+    - 嚴格落實交通工程規範「路段禁止迴轉與超車（路口除外）」。
+    - 雙黃線總寬度約 $26\text{px}$（對應世界座標約 $0.10\text{m}$），在 $2.0\text{m}$ 雙向道路上比例協調，遠距離視角清晰銳利不糊成一團。
 - **立體路面幾何與材質**：採用 `BoxGeometry(2, 0.05, 2)`，頂部為路面紋理，側邊為多材質路緣石，避免地面 Z-fighting。
 
 #### 5.2 2m 次要網格吸附與直向路徑計算
@@ -1074,3 +1074,151 @@ $$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
 - 提取路口內轉彎車道（起訖軸向不同之貝茲曲線車道，例如北往東、南往西、西往北等）。
 - 沿著平滑航點序列取樣中間核心段，生成尺寸 $0.024\text{m} \times 0.08\text{m}$ 之純白微型虛線段。
 - 每個虛線段以切線角度即時校正航向角，高度設置於 $y = 0.038\text{m}$，提供清晰的車輛轉彎軌跡視覺引導。
+
+---
+
+### 三十、中央分向限制線（雙黃實線）程序化紋理與幾何連續性架構
+
+#### 30.1 交通法規與工程語意對齊
+- **設計法理原則**：道路規格載明「路段禁止迴轉（路口除外）」，原先單黃虛線在道路標線法理上屬於准許超車與迴轉之「行車分向線」，與遊戲規則產生法理矛盾。全面升級為「分向限制線（雙黃實線）」，具備絕對禁止跨越超車與禁止路段迴轉之工程語意。
+
+#### 30.2 幾何規格與各類道路網格無縫接合
+1. **直線道路 (`getStraightTexture`)**：
+   - 畫布尺寸：$512 \times 512$ 像素，道路中心線為 $X = 256$。
+   - 左側黃實線中心：$X = 247$，覆蓋範圍 $[243, 251]$。
+   - 右側黃實線中心：$X = 265$，覆蓋範圍 $[261, 269]$。
+   - 線寬：$8\text{px}$（世界座標約 $3.1\text{cm}$）；中夾瀝青間隙 $10\text{px}$（世界座標約 $3.9\text{cm}$）；雙黃線總寬度 $26\text{px}$（世界座標約 $0.10\text{m}$）。
+   - 繪製樣式：`ctx.setLineDash([])` 實線，色彩 `#f59e0b`。
+2. **直角彎道 (`getCornerTexture`)**：
+   - 同心圓弧圓心：$(512, 512)$。
+   - 外側黃實線圓弧半徑：$R_{\text{outer}} = 265\text{px}$。
+   - 內側黃實線圓弧半徑：$R_{\text{inner}} = 247\text{px}$。
+   - 線寬均為 $8\text{px}$，實線無虛化。
+   - 完美閉合數學驗證：在 $\theta = \pi$ 處，$X = 512 - 265 = 247$ 與 $X = 512 - 247 = 265$；在 $\theta = 1.5\pi$ 處，$Y = 512 - 265 = 247$ 與 $Y = 512 - 247 = 265$。與相鄰直線道路之雙黃線端點以 $0\text{px}$ 誤差完美無縫咬合。
+3. **T 字路口 (`getThreeWayTexture`)**：
+   - 南北貫通幹道引道段（$Y \in [0, 140]$ 與 $Y \in [372, 512]$）：繪製標準雙黃實線，貫徹路段禁止超車與迴轉。
+   - 支線交會開口段（$Y \in [140, 372]$）：平滑轉化為雙黃虛線（`setLineDash([20, 16])`），明確展現「路口除外」之轉向通行合法性，引導車輛進出支線。
+4. **十字路口 (`getFourWayTexture`)**：
+   - 路口衝突區內部維持純淨瀝青，不繪製中央分向線，完全符合現代十字路口工程規範。
+5. **建造選單 UI 圖標 (`BuildMenu.ts`)**：
+   - 雙向車道卡片預覽圖標之中央標線同步更新為雙黃實線 SVG，保持遊戲視覺與規格說明之高度一致性。
+
+
+---
+
+### 三十一、路口車輛停止線 (Stop Line) 3D 程序化標線與停等動力學架構
+
+#### 31.1 道路交通工程法理與停止線配置
+- **交通標線規範定位**：停止線用以指示車輛停止之界限，保持與行人穿越道（斑馬線）之安全淨距。
+- **單向進口車道專屬性**：停止線僅繪製於「進入路口側之進口車道」，嚴格禁止跨越對向出口車道，從而完整保留離境車道之通行淨空。
+- **空間緩衝階層佈局**：
+  $$\text{進口直道} \longrightarrow \text{導向箭頭 (長 0.468m)} \xrightarrow{13.4\text{cm 留白}} \text{停止線 (厚 0.065m)} \xrightarrow{11.8\text{cm 緩衝}} \text{路口斑馬線 (寬 0.22m)}$$
+
+#### 31.2 停止線幾何尺寸與座標對齊數學
+1. **尺寸參數**：
+   - 車道橫向寬度：$W_{\text{stop}} = 0.70\text{m}$（精準覆蓋內側雙黃線外緣 $0.06\text{m}$ 至外側白霧線/路緣 $0.76\text{m}$）。
+   - 行車方向厚度：$T_{\text{stop}} = 0.065\text{m}$（高對比純白 `#ffffff`，高空俯瞰醒目清晰）。
+   - 離地高度：$y = 0.0565\text{m}$（浮於路面 $0.055\text{m}$ 上方 $1.5\text{mm}$，`depthWrite: false`、`polygonOffsetFactor: -4`，抗鋸齒無破面）。
+2. **拓撲座標映射**：
+   - 停止線中心距離網格中心：$\text{STOP\_LINE\_OFFSET} = 0.85\text{m}$（即距路口交界處 $1.0 - 0.85 = 0.15\text{m}$）。
+   - 停止線中心橫向偏移：$\text{STOP\_LINE\_LANE\_CENTER} = 0.41\text{m}$。
+   - 南北進口向：`createStopLineMesh(false)`，幾何尺寸 $0.70\text{m} \times 0.065\text{m}$。
+   - 東西進口向：`createStopLineMesh(true)`，幾何尺寸 $0.065\text{m} \times 0.70\text{m}$。
+
+#### 31.3 車輛紅燈煞停動力學校準 (`VehicleManager.ts`)
+- **實體尺寸**：車身長度 $0.82\text{m}$，車頭保險桿位於車體中心前方 $0.41\text{m}$。
+- **停等距離校正**：
+  - 將停等緩衝點由原先的 $0.25\text{m}$ 調校為 $\text{STOP\_BUFFER} = 0.62\text{m}$。
+  - 當車輛在紅燈前煞停時，車體中心位於交界前 $0.62\text{m}$，前保險桿位於交界前 $0.62 - 0.41 = 0.21\text{m}$。
+  - 停止線後緣位於交界前 $0.15 + 0.0325 = 0.1825\text{m}$。
+  - **停等視覺效果**：車頭前保險桿恰好停於停止線後方約 $2.8\text{cm}$ 處，完全不壓線、不闖入斑馬線，視覺極致擬真。
+
+
+---
+
+### 三十二、車道空間隊列 (Lane Queue) 與虛擬障礙物跟車防追撞技術架構
+#### 32.1 交通跟車問題與架構選型對比
+- **暴力物理射線 (Raycast) 之致命缺陷**：
+  - 彎道與轉向穿幫：直線射線在弧線車道容易射向路側、人行道或對向來車，產生幽靈煞車（Phantom Braking）。
+  - 運算複雜度為 $O(N^2)$ 或頻繁 GPU/CPU 求交，隨車輛增加效能急遽劣化。
+- **車道空間隊列 (Lane Queue) 選型優勢**：
+  - 車道本質是一維連續曲線流（1D Manifold），在車道內建立有序隊列，查找前車（Leader）達到極致的 $\mathbf{O(1)}$ 常數時間。
+  - 自然貼合任意幾何形狀之車道（直線、同心弧、S型轉彎），無幾何誤判。
+
+#### 32.2 車道隊列數據結構與排序算法 (`VehicleManager.ts`)
+1. **隊列映射結構**：
+   - `laneQueues: Map<string, LaneVehicleEntry[]>`，記錄每條車道上的活動車輛。
+   - 記錄距離車道出口之剩餘累積距離：
+     $$\text{distToExit} = \|\mathbf{p}_{\text{curr}} - \mathbf{w}_{\text{target}}\| + \sum_{k=\text{target}}^{\text{end of lane}} \|\mathbf{w}_k - \mathbf{w}_{k+1}\|$$
+2. **升冪隊列排序**：
+   - 依據 `distToExit` 進行升冪排序，索引 $0$（`distToExit` 最小者）即為最靠近車道出口之隊頭車輛（Lane Leader）。
+   - 同車道後車尋找前車：直接取在隊列中 `distToExit` 比自車小且最接近之車輛，距離即為 $\Delta d = \text{distToExit}_{\text{self}} - \text{distToExit}_{\text{lead}}$。
+
+#### 32.3 跨車道銜接（隊頭感知）演算法 (Cross-Lane Lookahead)
+- **問題場景**：當自車為當前車道隊頭時，前車可能已跨入下一段車道（如路口轉彎連接道或下游路段），若無跨車道感知，後車將無法預判下游擁堵而撞入路口。
+- **解析邏輯**：
+  1. 沿自身即將經過的航點提取後續車道清單（最多預覽 3 段下游車道）。
+  2. 若下游車道存在車輛，以 $O(1)$ 鎖定該車道隊列之**最後一輛車（隊尾 Tail Car，即離進口最近者）**。
+  3. 計算連續路徑總間隔：
+     $$\text{distToLead} = \text{distToExit}_{\text{self}} + \sum \text{LaneLength}_{\text{intermediate}} + \max(0, \text{LaneLength}_{\text{next}} - \text{distToExit}_{\text{tail}})$$
+  4. 若 $\text{distToLead} \le 8.0\text{m}$，將其納入跟車制動約束，徹底避免路口阻塞（Gridlock）與追撞。
+
+#### 32.4 車身長度補償與安全距離幾何模型
+- **車體真實尺寸**：
+  - 幾何模型長度 $0.82\text{m}$，經等比縮放 $0.45\times$ 後實際車長 $L_{\text{veh}} = 0.369\text{m}$（半長 $L_{\text{half}} = 0.185\text{m}$）。
+- **舒適視覺間距**：
+  - 停等時兩車保險桿純淨空隙 $\text{Gap}_{\text{stop}} = 0.38\text{m}$。
+  - 中心點完全靜止時最小安全車距：
+    $$\text{MIN\_FOLLOWING\_DIST} = L_{\text{veh}} + \text{Gap}_{\text{stop}} = 0.37 + 0.38 = \mathbf{0.75\text{m}}$$
+- **純淨有效間隔 (Net Gap)**：
+  $$\text{netGap} = \max(0, \text{centerDist} - 0.75\text{m})$$
+
+#### 32.5 虛擬障礙物運動學與號誌融合控制公式
+1. **動態跟車安全煞車公式**：
+   $$v_{\text{safe}} = \sqrt{\max\left(0, v_{\text{lead}}^2 + 2 \cdot a_{\text{decel}} \cdot \text{netGap}\right)}$$
+   - 當前車完全煞停 ($v_{\text{lead}} = 0$) 時，公式自然收斂為平滑停等曲線 $\sqrt{2 \cdot a_{\text{decel}} \cdot \text{netGap}}$。
+   - 當前車巡航行駛時，自車隨間隙縮小自動平滑過渡並等速跟隨。
+2. **號誌與跟車雙重約束決策**：
+   $$v_{\text{desired}} = \min(v_{\text{target}}, v_{\text{signal}}, v_{\text{lead}})$$
+   $$\Delta x_{\text{max}} = \min(\text{maxSignalMove}, \text{netGap})$$
+   $$\Delta x = \min(v \cdot \Delta t, \Delta x_{\text{max}})$$
+   - 從數學位移上限保證單幀位移永遠不超過淨空隙，即時在極端掉幀下也絕無可能穿模撞車。
+3. **綠燈波（Shockwave Effect）自然湧現**：
+   - 綠燈亮起時，前車先啟動，車距隨之拉開，後車平滑加速跟上，展現真實的骨牌式依序起步視覺。
+
+---
+
+### 33. 土地劃分框選模式與大面積批次用途指派 (`ZoningManager.ts` & `BuildMenu.ts`)
+
+#### 33.1 架構設計與操作模式解耦
+- **分區工具雙模態 (Dual-Modal Tooling)**：
+  - `brush`（塗抹模式）：維持 Cities: Skylines 經典連續塗抹手感，點擊或按住拖曳快速填色。
+  - `box`（框選模式）：支援大面積矩形區域拉伸，框選鬆開後一次性批次賦予分區用途（住宅區或清除）。
+  - 工具操作模式（`ZoningToolMode: 'brush' | 'box'`）與目標用途（`currentMode: 'Residential' | 'Dezone'`）採正交設計，互相解耦獨立切換。
+- **UI 與快捷操作**：
+  - 子選單頂部新增 `.zoning-tool-mode-bar` 雙 Tab 切換列，具備明亮綠色發光外框反饋。
+  - 鍵盤快速鍵：選單開啟狀態下按下 `Tab` 鍵即可在塗抹與框選間雙向切換；`Escape` 或滑鼠右鍵可取消當前框選。
+
+#### 33.2 零記憶體配置負擔的 3D 矩形框選視覺系統 (Zero-Allocation 3D Marquee)
+- **視覺組成架構**：
+  - `boxFillMesh`：單一共享 `PlaneGeometry(1, 1)`，透過水平旋轉 $\theta_x = -\frac{\pi}{2}$ 緊貼地面。
+  - `boxOutlineLine`：以子物件形式掛載於 `boxFillMesh` 之 `LineLoop` 四邊邊線幾何，局部垂直位移 $z_{\text{local}} = 0.002\text{m}$，徹底消除與填滿面的 Z-fighting。
+- **動態空間 Transform 演算法**：
+  - 紀錄起點網格整數索引 $(zx_{\text{start}}, zz_{\text{start}})$ 與當前照射點 $(zx_{\text{curr}}, zz_{\text{curr}})$：
+    $$zx_{\text{min}} = \min(zx_{\text{start}}, zx_{\text{curr}}), \quad zx_{\text{max}} = \max(zx_{\text{start}}, zx_{\text{curr}})$$
+    $$zz_{\text{min}} = \min(zz_{\text{start}}, zz_{\text{curr}}), \quad zz_{\text{max}} = \max(zz_{\text{start}}, zz_{\text{curr}})$$
+  - 網格對齊世界空間邊界推導（Cell Size $c_s = 0.5\text{m}$）：
+    $$x_{\text{min}} = zx_{\text{min}} \cdot c_s, \quad x_{\text{max}} = (zx_{\text{max}} + 1) \cdot c_s$$
+    $$z_{\text{min}} = zz_{\text{min}} \cdot c_s, \quad z_{\text{max}} = (zz_{\text{max}} + 1) \cdot c_s$$
+    $$\text{width} = x_{\text{max}} - x_{\text{min}}, \quad \text{depth} = z_{\text{max}} - z_{\text{min}}$$
+    $$x_{\text{center}} = \frac{x_{\text{min}} + x_{\text{max}}}{2}, \quad z_{\text{center}} = \frac{z_{\text{min}} + z_{\text{max}}}{2}$$
+  - 每幀直接更新 `position.set(centerX, 0.034, centerZ)` 與 `scale.set(width, depth, 1)`，無需重新生成 Geometry，維持 60 FPS 極致流暢度。
+
+#### 33.3 拓撲保護與批次用途送出 (Batch Zoning & Topology Guard)
+- **路側格位過濾與送出演算法**：
+  - 框選範圍於滑鼠放開時調用 `commitBoxSelection()`：
+    遍歷 $zx \in [zx_{\text{min}}, zx_{\text{max}}]$ 與 $zz \in [zz_{\text{min}}, zz_{\text{max}}]$，透過 `this.cells.get(key)` 檢核。
+  - 由於 `this.cells` 在建構時已透過 `!isOverlappingRoad(...)` 嚴格過濾道路鋪面，因此即使框選範圍跨越路面或路口，車道主體絕對不受任何分區覆蓋或污染。
+- **即時 HUD 狀態氣泡動態推播 (Interactive Tooltip)**：
+  - 框選拖曳時動態計算矩形網格維度（$W \times D$）與內部實際涵蓋之路側分區格數 $N_{\text{cells}}$。
+  - 即時反饋：「正在框選：$W \times D$ 格（包含 $N$ 格路側分區）· 放開滑鼠以指派用途 · 右鍵取消」。

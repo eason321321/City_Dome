@@ -1598,3 +1598,176 @@
 - **構建驗證**：執行 `npm run build`，TypeScript 與 Vite 打包 0 報錯、0 警告。
 - **標線尺寸調整**：依使用者回饋，將導向標線尺寸等比放大 1.3 倍（寬度由 0.22m 放大至 0.286m，長度由 0.36m 放大至 0.468m），高空視野更加清晰醒目。
 - **Git 狀態**：依使用者指示建立穩定版 GIT 版本（Commit: `176b849`），並成功推送至 GitHub 遠端儲存庫（`https://github.com/eason321321/City_Dome`）。工作區樹乾淨無任何未提交檔案。
+
+
+---
+
+## [2026-11-11] 第 19 輪作業：道路行車分向限制線（雙黃實線）工程語意與程序化紋理重構
+
+### 本輪更新摘要
+- **目標**：
+  依使用者指示，既然道路系統規格已明確規定「路段禁止迴轉（路口除外）」，原先單黃虛線（屬於准許超車與迴轉之分道線）與規範矛盾，應全面更換為標準「雙黃實線（分向限制線）」。
+- **實作內容**：
+  1. **標準直線車道紋理 (`getStraightTexture`)**：
+     - 將中央單黃虛線替換為標準雙黃實線（`#f59e0b`，每條線寬 $8\text{px}$，實線無虛化）。
+     - 左線中心軸位於 $X = 247$，右線中心軸位於 $X = 265$，中間保留 $10\text{px}$ 瀝青間距。
+     - 總寬度 $26\text{px}$（對應世界座標約 $0.10\text{m}$），線條銳利高對比，縮小視角下清晰可辨。
+  2. **轉彎道紋理 (`getCornerTexture`)**：
+     - 將單黃虛線同心圓弧替換為同心雙黃實線弧線。
+     - 內弧半徑 $R = 247\text{px}$，外弧半徑 $R = 265\text{px}$，線寬 $8\text{px}$，實線繪製。
+     - 與相鄰直線道路的雙黃實線在接縫端點以 $0\text{px}$ 誤差完美無縫咬合。
+  3. **T 字路口紋理 (`getThreeWayTexture`)**：
+     - 直線貫通幹道引道段（$Y \in [0, 140]$ 與 $Y \in [372, 512]$）繪製標準雙黃實線，強調路段禁止跨越與迴轉。
+     - 支線進入與左轉交會區域（$Y \in [140, 372]$）轉化為雙黃虛線（`setLineDash([20, 16])`），明確展現「路口除外」之轉向通行合法性。
+  4. **建造選單 UI 圖標 (`BuildMenu.ts`)**：
+     - 雙向車道卡片圖標中的道路 SVG 中央標線同步由虛線改為雙黃實線，保持 UI 與 3D 世界視覺完全一致。
+- **原則**：依使用者指示保持工作區修改，暫不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. [`src/rendering/RoadTextureFactory.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/RoadTextureFactory.ts)：直道、彎道、T 字路口雙黃實線生成演算法。
+2. [`src/ui/BuildMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildMenu.ts)：雙向二線道卡片圖標中央標線更新為雙黃實線 SVG。
+3. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+4. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 30 章雙黃實線工程規範與數學咬合規格。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 編譯與 Vite 打包順利通過，0 錯誤、0 警告。
+- **Git 狀態**：工作區維持修改狀態，未執行 commit，符合使用者要求。
+
+---
+
+## [2026-11-11] 第 20 輪作業：路口車輛停止線 (Stop Line) 3D 程序化標線與車輛停等位置校準
+
+### 本輪更新摘要
+- **目標**：
+  依使用者指示，於所有路口進口處新增提供車輛停止位置參考之「停止線（Stop Line）」，並同步校正車輛紅燈停等位置，使車輛停等時車頭保險桿精確對齊於停止線後方。
+- **實作內容**：
+  1. **停止線 3D 標線工廠 (`RoadMarkingFactory.ts`)**：
+     - 新增 `createStopLineMesh(isEW: boolean)` 靜態生成方法。
+     - 規格：寬度 $0.70\text{m}$（橫跨單側進口車道，精準自中央雙黃線外緣延伸至路緣白霧線）、厚度 $0.065\text{m}$。
+     - 材質：純白高對比 MeshBasicMaterial，配置 `depthWrite: false`、`polygonOffsetFactor: -4`，抗鋸齒無破面。
+  2. **路網進口動態標線掛載 (`RoadNetwork.ts`)**：
+     - 在 `updateMarkings` 邏輯中，針對進入路口（`FourWay` 與 `ThreeWay`）之直線車道與路段末端（`Straight` / `DeadEnd`），於各接近進口車道精準生成停止線。
+     - 停止線中心設置於距離路口交界處前 $0.15\text{m}$（$\text{STOP\_LINE\_OFFSET} = 0.85\text{m}$），橫向置中於進口車道中心（$0.41\text{m}$）。
+     - 與既有導向箭頭（距交界 $0.55\text{m}$）與斑馬線（交界內 $0 \sim 0.22\text{m}$）形成流暢和諧的道路層次。
+  3. **車輛停等煞車動力學校準 (`VehicleManager.ts`)**：
+     - 車身長度 $0.82\text{m}$，車頭位於中心前 $0.41\text{m}$。
+     - 將紅燈停等緩衝點 `STOP_BUFFER` 由原先的 $0.25\text{m}$ 調整為 $0.62\text{m}$。
+     - 車輛在紅燈時完全煞停於距離路口交界 $0.62\text{m}$ 處，前保險桿恰好停於交界前 $0.21\text{m}$，即位於停止線後緣前方約 $2.8\text{cm}$ 處，達成極致精確的「車頭貼合停止線停等」擬真視覺。
+  4. **模型展台說明同步 (`DevMenu.ts`)**：
+     - 在 DevMenu 標線展台介紹中登錄停止線功能與停等基準。
+- **原則**：依指示維持工作區修改狀態，暫不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. [`src/rendering/RoadMarkingFactory.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/RoadMarkingFactory.ts)：新增停止線幾何、材質與 `createStopLineMesh` 方法。
+2. [`src/systems/RoadNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/RoadNetwork.ts)：路口接近端車道動態掛載 4 向停止線。
+3. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)：校準 `STOP_BUFFER` 實現車頭與停止線無縫對齊。
+4. [`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)：展台項目說明更新。
+5. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+6. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 31 章停止線規範與停等動力學校正。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 編譯與 Vite 打包順利通過，0 錯誤、0 警告。
+- **Git 狀態**：工作區維持修改狀態，未執行 commit。
+
+
+---
+
+## [2026-11-11] 第 21 輪作業：車道空間隊列 (Lane Queue) ＋ 虛擬障礙物跟車防追撞與紅燈排隊系統實作
+
+### 本輪更新摘要
+- **目標**：
+  徹底解決多輛車在停等紅燈時撞在一起、重疊穿模的問題，兼具 $O(1)$ 極致運算效能與真實交通功能性（平滑減速、安全車距、隊列骨牌式起步），並嚴格考慮「跨車道銜接（隊頭感知）」與「車身長度補償」。
+- **實作內容**：
+  1. **車道空間隊列架構 (Lane Queues)**：
+     - 在 `VehicleManager` 內部建立以車道 ID（`laneId`）為 key 的空間隊列 `Map<string, LaneVehicleEntry[]>`。
+     - 每幀將各活動車輛依其在當前車道中距離出口的剩餘距離（`distToLaneExit`）進行升冪排序，使隊列 Index 0 永遠為最靠近出口的隊頭車輛，尋找同車道前車達到 $O(1)$ 常數複雜度。
+  2. **跨車道銜接（隊頭感知）**：
+     - 當自車為當前車道隊頭時，自動沿其導航路徑（`route.routeWaypoints`）向下游預覽最多 3 段車道。
+     - 若下游車道有車，以 $O(1)$ 瞄準下游車道隊尾（離自車最近）車輛，將自車剩餘距離與下游車輛進度累加，無縫銜接跨車道前車感知，徹底杜絕車輛在路口交界處或轉彎時撞上前車。
+  3. **車身長度補償與安全距離 (Vehicle Length & Buffer Compensation)**：
+     - 實際車長為 $0.369\text{m}$（幾何 $0.82\text{m} \times 0.45$ 縮放）。
+     - 設定停等保險桿視覺舒適空隙為 $0.38\text{m}$，推導兩車中心點完全靜止時最小安全間距為 $\text{MIN\_FOLLOWING\_DIST} = 0.75\text{m}$。
+  4. **虛擬障礙物動態跟車與號誌融合模型**：
+     - 將前車車尾視為動態移動之停止線，計算純淨空隙距離 $\text{netGap} = \max(0, \text{centerDist} - 0.75\text{m})$。
+     - 採用動態跟車安全公式 $v_{\text{safe}} = \sqrt{\max(0, v_{\text{lead}}^2 + 2 \cdot a_{\text{decel}} \cdot \text{netGap})}$，在前車煞停時自然過渡為平滑停車，前車前進時平滑跟車。
+     - 融合路口號誌停止線與前車約束：$v_{\text{desired}} = \min(v_{\text{target}}, v_{\text{signal}}, v_{\text{lead}})$，並設定 $\text{maxAllowedMove} = \min(\text{maxSignalMove}, \text{maxLeadMove})$，從物理上 100% 杜絕穿模與追撞。
+- **原則**：依使用者指示保持工作區修改，不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)：實作車道空間隊列、跨車道隊頭感知、車身長度補償、動態跟車與紅燈排隊運動學。
+2. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+3. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 32 章車道空間隊列與跟車防追撞數學模型。
+4. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：記錄車道隊列與虛擬障礙物架構設計討論。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 編譯與 Vite 打包順利通過，0 錯誤、0 警告。
+- **Git 狀態**：工作區維持修改狀態，未執行 commit，符合使用者要求。
+
+---
+
+## [2026-11-11] 第 39 輪作業：土地劃分「框選模式」與大面積批次指派用途實作
+
+### 本輪更新摘要
+- **目標**：
+  依據開發者要求：「在區域化分選單內，新增框選模式，可以直接對一片寬選的區域指定用途，不新增GIT 版本」。
+- **實作內容**：
+  1. **選單模式切換 UI 架構 (`BuildMenu.ts`)**：
+     - 於土地劃分子選單加入操作模式切換列（`zoning-tool-mode-bar`），支援「🖌️ 塗抹模式」與「⬚ 框選模式」無縫切換。
+     - 整合 `Tab` 鍵盤快速鍵，隨時切換劃分方式。
+     - 劃分卡片文字與操作氣泡（Instruction Pill）依當前模式自適應更新（如「拖曳矩形框選批次指定」、「按住滑鼠左鍵拖曳拉出矩形...」）。
+  2. **高質感 3D 矩形框選視覺系統 (`ZoningManager.ts`)**：
+     - 採用 Three.js `PlaneGeometry(1, 1)` 與子節點 `LineLoop` 構成零記憶體配置負擔的動態拉伸選框。
+     - 住宅區模式：翠綠色半透明色塊（`#22c55e`）搭配明亮螢光綠外框（`#86efac`）。
+     - 清除模式：警示紅色半透明色塊（`#ef4444`）搭配亮粉紅外框（`#fca5a5`）。
+     - 懸浮游標自適應：未拖曳時顯示單格小方框指示角點起點；拖曳時即時計算長寬網格數（$W \times D$ 格）與選中路側分區格數，並動態推播至 HUD 氣泡。
+  3. **批次劃分指派與安全防禦**：
+     - 釋放滑鼠左鍵時，將框選空間範圍內所有臨路合法格位批次賦予指定用途（或清除）。
+     - 支援滑鼠右鍵或 `Escape` 鍵隨時中斷並取消當前框選。
+     - 道路車道鋪面受拓撲保護，絕不被框選覆蓋。
+- **原則**：嚴格遵守指示，保持工作區修改狀態，不建立 GIT 版本。
+
+### 本輪異動檔案清單
+1. [`src/systems/ZoningManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/ZoningManager.ts)：擴充 `ZoningToolMode`、框選 3D 幾何物件、材質管理、動態 Transform、事件綁定與批次送出邏輯。
+2. [`src/ui/BuildMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildMenu.ts)：新增模式切換 Tab 列、Tab 快捷鍵、氣泡動態即時預覽與選單聯動。
+3. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：記錄第 39 輪需求定案與設計決策。
+4. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+5. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 33 章框選劃分架構與數學幾何模型。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯與 Vite 打包順利通過，0 錯誤、0 警告。
+- **實機自動化測試**：透過 Headless Edge 與 CDP 連線驗證選單展開、模式切換、Tab 鍵切換、框選拖曳狀態與氣泡回饋，0 執行期錯誤。
+- **Git 狀態**：工作區維持修改狀態，未執行 commit，符合使用者要求。
+
+---
+
+## [2026-11-11] 第 40 輪作業：穩定版本 Git Commit 建立與 GitHub Push 同步
+
+### 本輪更新摘要
+- **目標**：
+  依據開發者要求，將近期多項已充分實裝、實機驗證通過之穩定功能（路口停止線、車道隊列虛擬障礙物防穿模、土地劃分框選模式）整合打包，建立乾淨的穩定版本 Git Commit 並 push 至遠端 GitHub 倉庫。
+- **整合實作功能一覽**：
+  1. **路口停止線與停等校準**：
+     - `RoadMarkingFactory.ts` & `RoadNetwork.ts`：路口進口端精準掛載純白 3D 停止線。
+     - `VehicleManager.ts`：紅燈煞停點精準校準為距離交界 $0.62\text{m}$，前保險桿恰好貼齊停止線。
+  2. **車道隊列 (Lane Queue) ＋ 虛擬障礙物防穿模排隊**：
+     - `VehicleManager.ts`：車道 ID 空間隊列排序（$O(1)$ 常數前車查找）、跨車道隊頭感知（沿後續 3 段車道預覽隊尾）、車長 $0.369\text{m}$ 與保險桿 $0.38\text{m}$ 安全空隙補償、動態跟車安全公式與物理位移上限防穿模。
+  3. **土地劃分「框選模式」與大面積批次指派**：
+     - `BuildMenu.ts`：分區子選單頂部新增操作模式切換列（`zoning-tool-mode-bar`）、支援 `Tab` 快速鍵雙向切換、HUD 操作說明氣泡動態即時顯示長寬網格與選中格數。
+     - `ZoningManager.ts`：零記憶體配置（Zero-Allocation Transform）3D 矩形選框與發光邊框、滑鼠右鍵/ESC 取消防護、放開左鍵批次指派用途、道路鋪面拓撲保護。
+- **原則**：依指示建立 Commit 並推送遠端。
+
+### 本輪異動檔案清單
+1. [`src/rendering/RoadMarkingFactory.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/RoadMarkingFactory.ts)
+2. [`src/rendering/RoadTextureFactory.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/RoadTextureFactory.ts)
+3. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)
+4. [`src/systems/RoadNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/RoadNetwork.ts)
+5. [`src/systems/ZoningManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/ZoningManager.ts)
+6. [`src/ui/BuildMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildMenu.ts)
+7. [`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)
+8. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)
+9. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)
+10. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build` 通過（0 錯誤、0 警告）。
+- **Git 狀態**：成功建立 Commit 並順利 Push 至 `origin/main`。

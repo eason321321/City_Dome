@@ -118,25 +118,27 @@ export class RoadTextureFactory {
   }
 
   /**
-   * 1. 標準直線雙向車道紋理 (含中央分道虛線與兩側白霧線)
+   * 1. 標準直線雙向車道紋理 (含中央分向限制線雙黃實線與兩側白霧線)
    */
   public static getStraightTexture(): THREE.CanvasTexture {
     if (this.straightTexture) return this.straightTexture;
 
     const { canvas, ctx } = this.createAsphaltCanvas();
 
-    // 兩側人行道交界白霧線（寬度 8px，與 56px (0.22m) 縮窄後人行道路緣石精確貼合）
+    // 兩側人行道交界白霧線（寬度 8px，與 58px (0.22m) 縮窄後人行道路緣石精確貼合）
     ctx.fillStyle = '#f1f5f9';
     ctx.fillRect(58, 0, 8, 512);
     ctx.fillRect(512 - 58 - 8, 0, 8, 512);
 
-    // 中央黃色虛線
+    // 中央雙黃實線（分向限制線：路段禁止超車與迴轉，線寬 8px，中心間距 18px，瀝青間隙 10px）
     ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 10;
-    ctx.setLineDash([40, 24]);
+    ctx.lineWidth = 8;
+    ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(256, 0);
-    ctx.lineTo(256, 512);
+    ctx.moveTo(247, 0);
+    ctx.lineTo(247, 512);
+    ctx.moveTo(265, 0);
+    ctx.lineTo(265, 512);
     ctx.stroke();
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -220,13 +222,29 @@ export class RoadTextureFactory {
     const swPx = 56;
     const roadInnerW = 512 - swPx * 2;
 
-    // 1. 直線貫通車道（南北向直通）：中央分道黃色虛線直通到底，無斑馬線橫跨
+    // 1. 直線貫通車道（南北向直通）：中央雙黃線分向限制線
+    // 北側引道 (y: 0 ~ 140) 與南側引道 (y: 372 ~ 512)：標準雙黃實線（路段禁止超車與迴轉）
     ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 10;
-    ctx.setLineDash([40, 24]);
+    ctx.lineWidth = 8;
+    ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(256, 0);
-    ctx.lineTo(256, 512);
+    ctx.moveTo(247, 0);
+    ctx.lineTo(247, 140);
+    ctx.moveTo(265, 0);
+    ctx.lineTo(265, 140);
+    ctx.moveTo(247, 372);
+    ctx.lineTo(247, 512);
+    ctx.moveTo(265, 372);
+    ctx.lineTo(265, 512);
+    ctx.stroke();
+
+    // 路口支線開口段 (y: 140 ~ 372)：轉化為雙黃虛線（開口引導，允許左轉與支線進出交會）
+    ctx.setLineDash([20, 16]);
+    ctx.beginPath();
+    ctx.moveTo(247, 140);
+    ctx.lineTo(247, 372);
+    ctx.moveTo(265, 140);
+    ctx.lineTo(265, 372);
     ctx.stroke();
 
     // 西側連續貫通白實線霧線 (貼齊 56px 人行道路緣)
@@ -307,12 +325,15 @@ export class RoadTextureFactory {
     ctx.arc(512, 512, 62, Math.PI, 1.5 * Math.PI);
     ctx.stroke();
 
-    // 中央黃色分道虛線弧線 (半徑 256，與直道 256px 中央黃線完美閉合)
+    // 中央同心雙黃實線弧線（外弧半徑 265、內弧半徑 247，線寬 8px，與直道中央雙黃線無縫閉合）
     ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 10;
-    ctx.setLineDash([32, 20]);
+    ctx.lineWidth = 8;
+    ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.arc(512, 512, 256, Math.PI, 1.5 * Math.PI);
+    ctx.arc(512, 512, 247, Math.PI, 1.5 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(512, 512, 265, Math.PI, 1.5 * Math.PI);
     ctx.stroke();
 
     const texture = new THREE.CanvasTexture(canvas);

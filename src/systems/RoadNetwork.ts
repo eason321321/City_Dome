@@ -417,18 +417,19 @@ export class RoadNetwork {
   }
 
   /**
-   * 重建本格位的行車導向標線
+   * 重建本格位的行車導向標線與路口停止線
    * 遵循標準道路工程規範：
    * 1. 路口內部 (FourWay / ThreeWay) 與彎道 (Corner) 保持純淨平整瀝青路面，絕不在路口中心繪製任何雜亂線段或箭頭。
    * 2. 導向箭頭標線僅在「進入路口前之接近直道車道 (Approach Lanes)」精準繪製 1 枚，讓駕駛人在進入路口前清楚確認可行駛之方向。
+   * 3. 停止線 (Stop Line) 繪製於接近路口端單側進口車道上（距離路口交界處 0.15m），提供車輛停等號誌與防範壓上斑馬線之精確視覺基準。
    */
   private updateMarkings(tile: RoadTile): void {
     tile.markingsGroup.clear();
 
     const { gx, gz, type } = tile;
 
-    // 僅在直線車道 (Straight) 上且該車道朝向路口前進時，於接近端車道繪製導向標線
-    if (type !== 'Straight') {
+    // 僅在直線車道或路段末端 (Straight / DeadEnd) 上且該車道朝向路口前進時，於接近端車道繪製導向標線與停止線
+    if (type !== 'Straight' && type !== 'DeadEnd') {
       return;
     }
 
@@ -438,7 +439,9 @@ export class RoadNetwork {
     const westKey = `${gx - 2},${gz}`;
 
     const LANE_OFFSET = 0.28;
-    const APPROACH_OFFSET = 0.45; // 距離進入路口之交界處 0.55m
+    const APPROACH_OFFSET = 0.45; // 導向箭頭中心距路口交界 0.55m
+    const STOP_LINE_OFFSET = 0.85; // 停止線中心距格位中心 0.85m (即距離路口交界處 0.15m)
+    const STOP_LINE_LANE_CENTER = 0.41; // 停止線中心偏離道路中線 0.41m (涵蓋 0.06m ~ 0.76m 進口車道)
 
     // 1. 北側相鄰為路口：本格位之北向車道 (X = +LANE_OFFSET，前進方向 -Z) 即將駛入北側路口
     const northNeighbor = this.tiles.get(northKey);
@@ -450,6 +453,11 @@ export class RoadNetwork {
       const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, 0); // 朝向 -Z (北，直行方向)
       arrowMesh.position.set(gx + LANE_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz - APPROACH_OFFSET);
       tile.markingsGroup.add(arrowMesh);
+
+      // 北進口車道停止線 (沿 X 軸橫跨北向進口車道)
+      const stopLineMesh = RoadMarkingFactory.createStopLineMesh(false);
+      stopLineMesh.position.set(gx + STOP_LINE_LANE_CENTER, RoadMarkingFactory.MARKING_HEIGHT, gz - STOP_LINE_OFFSET);
+      tile.markingsGroup.add(stopLineMesh);
     }
 
     // 2. 南側相鄰為路口：本格位之南向車道 (X = -LANE_OFFSET，前進方向 +Z) 即將駛入南側路口
@@ -462,6 +470,11 @@ export class RoadNetwork {
       const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, Math.PI); // 朝向 +Z (南，直行方向)
       arrowMesh.position.set(gx - LANE_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz + APPROACH_OFFSET);
       tile.markingsGroup.add(arrowMesh);
+
+      // 南進口車道停止線 (沿 X 軸橫跨南向進口車道)
+      const stopLineMesh = RoadMarkingFactory.createStopLineMesh(false);
+      stopLineMesh.position.set(gx - STOP_LINE_LANE_CENTER, RoadMarkingFactory.MARKING_HEIGHT, gz + STOP_LINE_OFFSET);
+      tile.markingsGroup.add(stopLineMesh);
     }
 
     // 3. 東側相鄰為路口：本格位之東向車道 (Z = +LANE_OFFSET，前進方向 +X) 即將駛入東側路口
@@ -474,6 +487,11 @@ export class RoadNetwork {
       const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, -Math.PI / 2); // 朝向 +X (東，直行方向)
       arrowMesh.position.set(gx + APPROACH_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz + LANE_OFFSET);
       tile.markingsGroup.add(arrowMesh);
+
+      // 東進口車道停止線 (沿 Z 軸橫跨東向進口車道)
+      const stopLineMesh = RoadMarkingFactory.createStopLineMesh(true);
+      stopLineMesh.position.set(gx + STOP_LINE_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz + STOP_LINE_LANE_CENTER);
+      tile.markingsGroup.add(stopLineMesh);
     }
 
     // 4. 西側相鄰為路口：本格位之西向車道 (Z = -LANE_OFFSET，前進方向 -X) 即將駛入西側路口
@@ -486,6 +504,11 @@ export class RoadNetwork {
       const arrowMesh = RoadMarkingFactory.createArrowMesh(arrowType, Math.PI / 2); // 朝向 -X (西，直行方向)
       arrowMesh.position.set(gx - APPROACH_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz - LANE_OFFSET);
       tile.markingsGroup.add(arrowMesh);
+
+      // 西進口車道停止線 (沿 Z 軸橫跨西向進口車道)
+      const stopLineMesh = RoadMarkingFactory.createStopLineMesh(true);
+      stopLineMesh.position.set(gx - STOP_LINE_OFFSET, RoadMarkingFactory.MARKING_HEIGHT, gz - STOP_LINE_LANE_CENTER);
+      tile.markingsGroup.add(stopLineMesh);
     }
   }
 

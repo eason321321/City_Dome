@@ -22,10 +22,16 @@ export class RoadMarkingFactory {
   private static arrowGeometry: THREE.PlaneGeometry | null = null;
   private static dashMaterial: THREE.MeshBasicMaterial | null = null;
   private static dashGeometry: THREE.PlaneGeometry | null = null;
+  private static stopLineMaterial: THREE.MeshBasicMaterial | null = null;
+  private static stopLineGeometryNS: THREE.PlaneGeometry | null = null;
+  private static stopLineGeometryEW: THREE.PlaneGeometry | null = null;
 
   // 箭頭平面尺寸 (長 0.468m，寬 0.286m，依指示等比放大 1.3 倍，高空俯瞰更加清晰醒目)
   public static readonly ARROW_WIDTH = 0.286;
   public static readonly ARROW_LENGTH = 0.468;
+  // 停止線幾何尺寸 (單側進口車道寬 0.70m，厚度 0.065m，世界尺度精確對齊)
+  public static readonly STOP_LINE_WIDTH = 0.70;
+  public static readonly STOP_LINE_THICKNESS = 0.065;
   // 道路頂面位於 0.055m (BoxGeometry 高度 0.05m，中心在 0.03m: 0.03 + 0.025 = 0.055m)
   // 標線位於 0.0565m (高出路面 1.5mm)，搭配深度補償與無深度寫入，絕無 Z-fighting 且絕不被路面遮擋！
   public static readonly MARKING_HEIGHT = 0.0565;
@@ -143,6 +149,52 @@ export class RoadMarkingFactory {
 
     group.rotation.y = headingAngle;
     return group;
+  }
+
+  /**
+   * 取得停止線純白無光材質
+   */
+  private static getStopLineMaterial(): THREE.MeshBasicMaterial {
+    if (!this.stopLineMaterial) {
+      this.stopLineMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.96,
+        depthTest: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
+        side: THREE.DoubleSide,
+      });
+    }
+    return this.stopLineMaterial;
+  }
+
+  /**
+   * 建立接近路口端之單向車道純白停止線 3D Mesh (Stop Line)
+   * 橫跨接近側單向車道（寬 0.70m，厚度 0.065m），提供車輛停等位置之精確視覺基準
+   * @param isEW 若為 true 代表東西向進口 (沿 Z 軸橫跨車道)；若為 false 代表南北向進口 (沿 X 軸橫跨車道)
+   */
+  public static createStopLineMesh(isEW: boolean): THREE.Mesh {
+    let geo = isEW ? this.stopLineGeometryEW : this.stopLineGeometryNS;
+    if (!geo) {
+      if (isEW) {
+        // 東西向車道：標線寬度沿 Z 軸 (0.70m)，厚度沿 X 軸 (0.065m)
+        geo = new THREE.PlaneGeometry(this.STOP_LINE_THICKNESS, this.STOP_LINE_WIDTH);
+        this.stopLineGeometryEW = geo;
+      } else {
+        // 南北向車道：標線寬度沿 X 軸 (0.70m)，厚度沿 Z 軸 (0.065m)
+        geo = new THREE.PlaneGeometry(this.STOP_LINE_WIDTH, this.STOP_LINE_THICKNESS);
+        this.stopLineGeometryNS = geo;
+      }
+    }
+
+    const mesh = new THREE.Mesh(geo, this.getStopLineMaterial());
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.renderOrder = 5;
+    mesh.name = isEW ? 'StopLine_EW' : 'StopLine_NS';
+    return mesh;
   }
 
   /**

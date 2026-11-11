@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { VehicleModelFactory } from '../rendering/VehicleModelFactory';
-import { RoadNetwork } from '../systems/RoadNetwork';
+import { RoadNetwork, DirectedLane } from '../systems/RoadNetwork';
 import { Pathfinding, PathResult } from '../systems/Pathfinding';
 
 export interface ActiveVehicle {
@@ -18,6 +18,13 @@ export interface ActiveVehicle {
   disappearImmediately?: boolean; // 抵達終點後是否立即消失（市民到家）
   keepMeshOnArrive?: boolean;     // 抵達終點後保留車輛 Mesh (由路邊停車管理器接管為停車實體)
   onArrived?: (vehicle: ActiveVehicle) => void; // 抵達終點之業務回調 (傳入自身實體)
+  currentLaneId?: string;    // 當前行駛所在之車道 ID (供車道隊列管理)
+  distToLaneExit?: number;   // 距離當前車道出口之剩餘累積距離 (m)
+}
+
+export interface LaneVehicleEntry {
+  vehicle: ActiveVehicle;
+  distToExit: number;        // 距離當前車道出口之剩餘累積距離 (m)
 }
 
 /**
@@ -34,6 +41,24 @@ export class VehicleManager {
   private vehicles: ActiveVehicle[] = [];
   private nextVehicleId: number = 1;
 
+  // 車道空間隊列 (Lane Queue)：以車道 ID 為 key，紀錄位於該車道上的車輛 (依距離出口剩餘距離由小到大排序)
+  private laneQueues: Map<string, LaneVehicleEntry[]> = new Map();
+
+  // 車道幾何長度快取 (避免每幀重複計算)
+  private laneLengthCache: Map<string, number> = new Map();
+
+  // 車身長度補償與跟車安全參數 (單位: 公尺)
+  // 幾何體縮放後實際車長: 0.82m * 0.45 = 0.369m
+  public static readonly VEHICLE_LENGTH: number = 0.37;
+  // 停等時兩車保險桿之間的視覺安全舒適空隙
+  public static readonly STOPPING_GAP: number = 0.38;
+  // 兩車中心點靜止停等時之最小安全車距 = 車長 + 保險桿間隔 = 0.75m
+  public static readonly MIN_FOLLOWING_DIST: number = 0.75;
+  // 路口停止線前車身中心點緩衝距離 (已校準保險桿不壓停止線且不侵入行人穿越道)
+  public static readonly STOP_LINE_BUFFER: number = 0.62;
+  // 前方視野探測最大距離 (超過此距離不觸發跟車減速)
+  public static readonly LOOKAHEAD_DISTANCE: number = 8.0;
+
   // 外部公路過境車流定時器 (平常路過的車輛：左邊出來右邊出去，反之)
   private ambientTrafficTimer: number = 0;
   private readonly AMBIENT_SPAWN_INTERVAL: number = 3.5;
@@ -41,6 +66,109 @@ export class VehicleManager {
   constructor(scene: THREE.Scene, roadNetwork: RoadNetwork) {
     this.scene = scene;
     this.roadNetwork = roadNetwork;
+  }
+
+  /**
+   * 計算並快取單一車道之總幾何長度 (m)
+   */
+  private getLaneLength(lane: DirectedLane): number {
+    let len = this.laneLengthCache.get(lane.id);
+    if (len !== undefined) return len;
+
+    len = 0;
+    const wps = lane.waypoints;
+    if (wps && wps.length >= 2) {
+      for (let i = 0; i < wps.length - 1; i++) {
+        len += wps[i].distanceTo(wps[i + 1]);
+      }
+    } else {
+      len = 2.0; // 預設標準道路格位長度
+    }
+
+    this.laneLengthCache.set(lane.id, len);
+    return len;
+  }
+
+  /**
+   * 依據車道隊列與跨車道銜接（隊頭感知）搜尋前方最近的車輛 (Leader)
+   * 1. 若同車道前方有車，以 O(1) 複雜度直接命中同一車道的前車
+   * 2. 若同車道前方無車（本車為該車道隊頭），沿著行車路徑自動向下游車道探測
+   */
+  private findLeadVehicle(
+    v: ActiveVehicle,
+    maxLookahead: number
+  ): { leadVehicle: ActiveVehicle; distance: number } | null {
+    const rwps = v.route.routeWaypoints;
+    if (!rwps || v.currentWaypointIndex >= rwps.length) return null;
+
+    const currLaneId = v.currentLaneId;
+    if (!currLaneId || v.distToLaneExit === undefined) return null;
+
+    const vDistToExit = v.distToLaneExit;
+    const sameLaneQueue = this.laneQueues.get(currLaneId);
+
+    // 1. 同車道前車查找：尋找在同車道中 distToExit 比自車小（更靠前）且距離最近的車輛
+    if (sameLaneQueue && sameLaneQueue.length > 1) {
+      let closestAhead: LaneVehicleEntry | null = null;
+      for (const entry of sameLaneQueue) {
+        if (entry.vehicle === v) continue;
+        // 需比自車更靠前（至少留 0.01m 避免同點浮點數微小誤差）
+        if (entry.distToExit < vDistToExit - 0.01) {
+          if (!closestAhead || entry.distToExit > closestAhead.distToExit) {
+            closestAhead = entry;
+          }
+        }
+      }
+
+      if (closestAhead) {
+        const dist = vDistToExit - closestAhead.distToExit;
+        if (dist <= maxLookahead) {
+          return { leadVehicle: closestAhead.vehicle, distance: dist };
+        }
+      }
+    }
+
+    // 2. 跨車道銜接（隊頭感知）：若同車道前方無車，沿著航點路徑向下游車道探測
+    // 收集自車即將進入的後續車道清單 (最多預覽前 3 段下游車道)
+    const upcomingLaneIds: string[] = [];
+    for (let k = v.currentWaypointIndex; k < rwps.length; k++) {
+      const lid = rwps[k].laneId;
+      if (lid && lid !== currLaneId && !upcomingLaneIds.includes(lid)) {
+        upcomingLaneIds.push(lid);
+        if (upcomingLaneIds.length >= 3) break;
+      }
+    }
+
+    if (upcomingLaneIds.length === 0) return null;
+
+    let accumulatedDist = vDistToExit; // 距當前車道出口之剩餘距離
+
+    for (const nextLaneId of upcomingLaneIds) {
+      if (accumulatedDist > maxLookahead) break;
+
+      const nextQueue = this.laneQueues.get(nextLaneId);
+      const nextLane = this.roadNetwork.getAllLanes().get(nextLaneId);
+      const nextLaneLen = nextLane ? this.getLaneLength(nextLane) : 2.0;
+
+      if (nextQueue && nextQueue.length > 0) {
+        // 在下游車道中，離自車最近的是排在該車道最尾端（distToExit 最大者）的車輛
+        const tailEntry = nextQueue[nextQueue.length - 1]; // 已依 distToExit 升冪排序
+        const distIntoNextLane = Math.max(0, nextLaneLen - tailEntry.distToExit);
+        const totalDist = accumulatedDist + distIntoNextLane;
+
+        if (totalDist <= maxLookahead) {
+          return {
+            leadVehicle: tailEntry.vehicle,
+            distance: totalDist,
+          };
+        }
+      }
+
+      // 下游該車道無車，累加車道長度後繼續探測再下一段車道
+      accumulatedDist += nextLaneLen;
+    }
+
+    return null;
   }
 
   /**
@@ -175,7 +303,7 @@ export class VehicleManager {
   }
 
   /**
-   * 每幀更新所有車輛位置、航向與號誌檢查
+   * 每幀更新所有車輛位置、航向與號誌檢查 (整合車道隊列、跟車防追撞與紅綠燈平滑煞停)
    */
   public update(deltaTime: number, isPaused: boolean = false): void {
     if (isPaused || deltaTime <= 0) return;
@@ -187,6 +315,7 @@ export class VehicleManager {
       this.spawnAmbientHighwayVehicle();
     }
 
+    // 2. 清理已抵達或已結束生命週期之車輛
     for (let i = this.vehicles.length - 1; i >= 0; i--) {
       const v = this.vehicles[i];
 
@@ -242,8 +371,50 @@ export class VehicleManager {
         }
         continue;
       }
+    }
 
-      // 1. 檢測前方最近的下一個路口停止線 (Stop Line)
+    // 3. 建立本幀各車道之空間隊列 (Lane Queues)
+    this.laneQueues.clear();
+    for (const v of this.vehicles) {
+      if (v.state === 'Arrived') continue;
+      const rwps = v.route.routeWaypoints;
+      if (!rwps || v.currentWaypointIndex >= rwps.length) continue;
+
+      const currWp = rwps[v.currentWaypointIndex];
+      const currLaneId = currWp.laneId;
+
+      // 計算自車當前中心點沿航點到達當前車道出口的剩餘距離
+      let distToExit = v.currentPosition.distanceTo(currWp.position);
+      for (let k = v.currentWaypointIndex; k + 1 < rwps.length && rwps[k + 1].laneId === currLaneId; k++) {
+        distToExit += rwps[k].position.distanceTo(rwps[k + 1].position);
+      }
+
+      v.currentLaneId = currLaneId;
+      v.distToLaneExit = distToExit;
+
+      let queue = this.laneQueues.get(currLaneId);
+      if (!queue) {
+        queue = [];
+        this.laneQueues.set(currLaneId, queue);
+      }
+      queue.push({ vehicle: v, distToExit });
+    }
+
+    // 對每個車道隊列依據 distToExit 進行升冪排序 (最靠近出口者排在前面，即隊頭)
+    for (const queue of this.laneQueues.values()) {
+      if (queue.length > 1) {
+        queue.sort((a, b) => a.distToExit - b.distToExit);
+      }
+    }
+
+    // 4. 逐車執行運動學決策、號誌判斷、跟車防追撞與航向更新
+    for (const v of this.vehicles) {
+      if (v.state === 'Arrived') continue;
+
+      const rwps = v.route.routeWaypoints;
+      if (!rwps || v.currentWaypointIndex >= rwps.length) continue;
+
+      // 4.1 檢測前方最近的下一個路口停止線 (Stop Line)
       let nextStopLineIndex = -1;
       for (let k = v.currentWaypointIndex; k < rwps.length; k++) {
         if (rwps[k].isStopLine) {
@@ -272,44 +443,74 @@ export class VehicleManager {
         }
       }
 
-      // 2. 停等與安全減速動力學
-      const STOP_BUFFER = 0.25; // 停在停止線前 0.25m 處，避免壓在斑馬線上
+      // 4.2 計算紅綠燈號誌之安全速限與最大允許位移
+      let targetSpeedForSignal = v.targetSpeed;
+      let maxSignalMove = Infinity;
 
       if (isRedOrYellow && nextStopLineIndex !== -1) {
-        if (distToStopLine <= STOP_BUFFER + 0.05) {
-          // 已就停等線位置：完全煞停靜止
-          v.state = 'WaitingLight';
-          v.speed = 0;
-        } else if (distToStopLine <= 6.0) {
-          // 距離路口 6m 內：依安全制動距離平滑減速 (v = sqrt(2 * a * d))
-          v.state = 'WaitingLight';
-          const remainingDist = Math.max(0, distToStopLine - STOP_BUFFER);
-          const desiredSpeed = Math.min(v.targetSpeed, Math.sqrt(2 * v.deceleration * remainingDist));
-          if (v.speed > desiredSpeed) {
-            v.speed = Math.max(desiredSpeed, v.speed - v.deceleration * deltaTime);
-          } else {
-            v.speed = Math.min(desiredSpeed, v.speed + v.acceleration * deltaTime);
-          }
-        } else {
-          // 距離路口尚遠：正常巡航
-          v.state = 'Cruising';
-          v.speed = Math.min(v.targetSpeed, v.speed + v.acceleration * deltaTime);
+        const remainingDistToStopLine = Math.max(0, distToStopLine - VehicleManager.STOP_LINE_BUFFER);
+        maxSignalMove = remainingDistToStopLine;
+
+        if (distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.05) {
+          targetSpeedForSignal = 0;
+        } else if (distToStopLine <= VehicleManager.LOOKAHEAD_DISTANCE) {
+          targetSpeedForSignal = Math.min(
+            v.targetSpeed,
+            Math.sqrt(2 * v.deceleration * remainingDistToStopLine)
+          );
         }
-      } else {
-        // 綠燈放行或前方無路口：正常加速或巡航
-        v.state = 'Cruising';
-        v.speed = Math.min(v.targetSpeed, v.speed + v.acceleration * deltaTime);
       }
 
-      // 3. 沿著航點序列前進
-      if (v.speed > 0) {
-        let remainingMove = v.speed * deltaTime;
+      // 4.3 透過車道隊列與跨車道探測搜尋前方車輛 (Leader)
+      const leadInfo = this.findLeadVehicle(v, VehicleManager.LOOKAHEAD_DISTANCE);
+      let targetSpeedForLead = v.targetSpeed;
+      let maxLeadMove = Infinity;
 
-        // 若前方遇紅黃燈，限制前進位移絕不越過停止線緩衝點
-        if (isRedOrYellow && nextStopLineIndex !== -1) {
-          const maxAllowedMove = Math.max(0, distToStopLine - STOP_BUFFER);
-          remainingMove = Math.min(remainingMove, maxAllowedMove);
+      if (leadInfo) {
+        const leadCar = leadInfo.leadVehicle;
+        const centerDist = leadInfo.distance;
+        // 考慮車身長度補償：中心點距離扣除最小停等距離，得到純空隙間距 (netGap)
+        const netGap = Math.max(0, centerDist - VehicleManager.MIN_FOLLOWING_DIST);
+        maxLeadMove = netGap;
+
+        if (centerDist <= VehicleManager.MIN_FOLLOWING_DIST + 0.05) {
+          // 已達或小於安全車距：速度不超過前車速度（若前車停等則本車為 0）
+          targetSpeedForLead = Math.min(v.targetSpeed, leadCar.speed);
+        } else if (centerDist <= VehicleManager.LOOKAHEAD_DISTANCE) {
+          // 動態跟車安全煞車公式：v_safe = sqrt(v_lead^2 + 2 * a_decel * netGap)
+          // 兼具巡航跟車減速與紅燈停等煞停
+          const safeSpeed = Math.sqrt(
+            Math.max(0, leadCar.speed * leadCar.speed + 2 * v.deceleration * netGap)
+          );
+          targetSpeedForLead = Math.min(v.targetSpeed, safeSpeed);
         }
+      }
+
+      // 4.4 融合號誌約束與跟車約束
+      const desiredSpeed = Math.min(v.targetSpeed, targetSpeedForSignal, targetSpeedForLead);
+      const maxAllowedMove = Math.min(maxSignalMove, maxLeadMove);
+
+      // 4.5 平滑加減速更新
+      if (v.speed > desiredSpeed) {
+        v.speed = Math.max(desiredSpeed, v.speed - v.deceleration * deltaTime);
+      } else {
+        v.speed = Math.min(desiredSpeed, v.speed + v.acceleration * deltaTime);
+      }
+
+      // 4.6 狀態判定 (停等紅燈或跟車停等)
+      const isStoppedForLight = isRedOrYellow && distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.08;
+      const isStoppedForCar = leadInfo !== null && leadInfo.leadVehicle.speed <= 0.05 && leadInfo.distance <= VehicleManager.MIN_FOLLOWING_DIST + 0.08;
+
+      if (v.speed <= 0.05 && (isStoppedForLight || isStoppedForCar)) {
+        v.state = 'WaitingLight';
+        v.speed = 0;
+      } else {
+        v.state = 'Cruising';
+      }
+
+      // 4.7 沿著航點序列前進 (位移不超過 maxAllowedMove)
+      if (v.speed > 0) {
+        let remainingMove = Math.min(v.speed * deltaTime, maxAllowedMove);
 
         while (remainingMove > 0 && v.currentWaypointIndex < rwps.length) {
           const targetPos = rwps[v.currentWaypointIndex].position;
@@ -333,7 +534,7 @@ export class VehicleManager {
           v.speed = 0;
         }
 
-        // 4. 更新車輛模型 Transform 與航向角（最短圓弧平滑旋轉）
+        // 4.8 更新車輛模型 Transform 與航向角（最短圓弧平滑旋轉）
         v.mesh.position.copy(v.currentPosition);
 
         if (v.currentWaypointIndex < rwps.length) {
@@ -359,6 +560,7 @@ export class VehicleManager {
       this.scene.remove(v.mesh);
     }
     this.vehicles = [];
+    this.laneQueues.clear();
   }
 
   public getActiveVehicles(): ActiveVehicle[] {
