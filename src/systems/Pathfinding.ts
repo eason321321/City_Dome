@@ -8,6 +8,7 @@ export interface RouteWaypoint {
   intersectionKey?: string;
   controllingSignal?: 'northSouth' | 'eastWest';
   isStopLine: boolean;
+  isUTurn?: boolean;
 }
 
 export interface PathResult {
@@ -99,7 +100,12 @@ export class Pathfinding {
         if (!nextLane) continue;
 
         // 計算邊長度 (以車道實際路徑點長度作為權重)
-        const edgeLength = this.calculateWaypointsDistance(nextLane.waypoints);
+        let edgeLength = this.calculateWaypointsDistance(nextLane.waypoints);
+        // 若為 180° 迴轉車道，施加阻抗懲罰 (Penalty Cost = +4.0m)，模擬減速掉頭與等待阻抗
+        // 既能精準防止常態巡航車輛誤入震盪，又能確保需要迴轉時優先選擇最近路口
+        if (nextLane.isUTurn) {
+          edgeLength += 4.0;
+        }
         const tentativeG = currentG + edgeLength;
 
         if (tentativeG < (gScore.get(nextId) ?? Infinity)) {
@@ -164,6 +170,7 @@ export class Pathfinding {
               intersectionKey: lane.intersectionKey,
               controllingSignal: lane.controllingSignal,
               isStopLine,
+              isUTurn: lane.isUTurn,
             });
             totalDist += dist;
           } else {
@@ -171,9 +178,10 @@ export class Pathfinding {
             if (isStopLine && routeWaypoints.length > 0) {
               const lastWp = routeWaypoints[routeWaypoints.length - 1];
               lastWp.isStopLine = true;
-              lastWp.isIntersection = true;
+              lastWp.isIntersection = false; // 停止線位於路口邊界之前，不屬於路口內部
               lastWp.intersectionKey = lane.intersectionKey;
               lastWp.controllingSignal = lane.controllingSignal;
+              lastWp.isUTurn = lane.isUTurn;
             }
           }
         } else {
@@ -185,6 +193,7 @@ export class Pathfinding {
             intersectionKey: lane.intersectionKey,
             controllingSignal: lane.controllingSignal,
             isStopLine,
+            isUTurn: lane.isUTurn,
           });
         }
       }

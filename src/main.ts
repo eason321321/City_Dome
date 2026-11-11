@@ -12,6 +12,7 @@ import { ParkingManager } from './simulation/ParkingManager';
 import { DevMenu } from './ui/DevMenu';
 import { BuildingManager } from './systems/BuildingManager';
 import { BackgroundTimer } from './simulation/BackgroundTimer';
+import { Pathfinding } from './systems/Pathfinding';
 
 console.log('🏗️ City Dome 城市建造模擬器初始化中...');
 
@@ -268,6 +269,7 @@ if (container) {
     parkingManager,
     devMenu,
     buildMenu,
+    Pathfinding,
   };
 
   console.log('✅ 底部狀態欄 UI 與時間推進系統已就緒！初始狀態：', initialWorldState);

@@ -2021,4 +2021,62 @@
     - **召回測試**：點擊召回按鈕，工廠內部人數扣除，市民平安返家，住宅名下車輛重新停泊於住宅旁並恢復閒置可用。
 - **Git 狀態**：維持工作區變更，**嚴格未建立 GIT 提交**。
 
+---
+
+## [2026-11-11] 第 47 輪作業：T 字路口與十字路口 180° 淚滴迴轉車道、A* 阻抗代價權重、對向衝突主動禮讓與全情境驗證
+
+### 本輪更新重點
+- **需求目標**：
+  1. 先建立 Git 安全節點並推送至 GitHub（提交雜湊 `fdfcbf6`，包含工業區、工廠模型、通勤系統與背景 Web Worker）。
+  2. 嚴密設計並實現包含迴轉（U-Turn）之有效路口拓撲（涵蓋 T 字路口 `ThreeWay` 與十字路口 `FourWay`）。
+  3. 考量道路車子清單系統（車道隊列）、跨車道銜接（隊頭隊尾感知）、對向衝突禮讓（Yield to oncoming traffic）、以及 180° 淚滴平滑軌跡（Teardrop Curve）。
+  4. 實施 A* 尋路演算法阻抗懲罰機制（Penalty Cost），防止常態巡航誤迴轉，同時保證需掉頭時精確選擇最近路口迴轉。
+  5. 測試路口在所有情況下正常運行（無頭瀏覽器 CDP 動態驗證），並確認所有現有機制（巡航車輛、入住車輛、通勤開車與停車）完好無損。
+  6. **嚴格遵守約束**：完成後向使用者完整說明；更改後**嚴格不新增 GIT 版本**。
+
+### 本輪修改檔案清單
+1. [`src/systems/RoadNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/RoadNetwork.ts)：
+   - `DirectedLane` 介面擴充 `isUTurn?: boolean;` 屬性。
+   - 封裝 `addIntersectionUTurnLane` 輔助函式，針對 `ThreeWay` 與 `FourWay` 的既有連接臂動態建立 180° 淚滴型（Teardrop Curve）平滑迴轉車道（`N_to_N`, `S_to_S`, `E_to_E`, `W_to_W`）。
+   - 每條迴轉車道由 7 個高精度路徑點組成，起始/終止點與路塊邊界座標（Offset = 0.28m）毫米級精準吻合，轉彎速限設為 6.5 m/s（23 km/h），並受對應方向紅綠燈號誌管控。
+   - `DeadEnd` 盡頭掉頭車道同步補全 `isUTurn: true` 屬性標記。
+2. [`src/systems/Pathfinding.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/Pathfinding.ts)：
+   - `RouteWaypoint` 擴充 `isUTurn?: boolean;` 屬性。
+   - A* 搜尋核心注入阻抗代價：`if (nextLane.isUTurn) edgeLength += 4.0;`（相當於 2 個完整路塊的等效通行阻抗，符合交通工程 U-Turn Delay 實務）。
+   - 在路徑重構 `reconstructPath` 中將 `isUTurn` 完整繼承至每一位元路徑點。
+3. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)：
+   - 實現「4.4 迴轉車輛路口衝突禮讓 (Yield to Oncoming Traffic)」機制：
+     - 自動探測自車當前或前瞻 6 點即將進入的迴轉車道及其所屬路口 `intersectionKey`。
+     - 根據迴轉流向（如 `N_to_N` 對應對向直行前綴 `_S_to_`、`W_to_W` 對應 `_E_to_`）動態鎖定衝突路權流。
+     - 若對向直行或轉彎車在 3.2m 衝撞半徑內，迴轉車速限降為 0，並平滑煞停等待；對向無車或通過後，自車恢復巡航並流暢加速迴轉。
+     - 若對向車輛同為迴轉車（`isUTurn === true`），兩者各自在半幅淚滴軌跡運轉，互不干涉同時通過。
+   - 狀態判定整合 `isWaitingYield`，禮讓等待時維持安全靜止狀態。
+4. [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)：
+   - 暴露 `Pathfinding` 至 `window.__cityDome`，方便自動化腳本與外部觀測除錯。
+5. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+6. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 40 章節，詳細闡述路口迴轉幾何、阻抗公式與禮讓狀態機。
+7. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：記錄路口迴轉機制設計考量與完整答覆。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯 0 錯誤，Vite 建置成功。
+- **無頭瀏覽器實測驗證（Chrome CDP 自動化腳本）**：
+  1. **T 字路口幾何拓撲測試**：
+     - 中心路塊自動辨識為 `ThreeWay`。
+     - 自動生成 3 條迴轉車道（`N_to_N`, `S_to_S`, `W_to_W`），不存在的東向臂（`E_to_E`）正確排除。
+     - 拓撲縫合檢驗：`lane_0_0_W_to_W.connectedNextLaneIds` 精確指向下游出境車道 `lane_-2_0_W`（銜接距離 0.000m）。
+  2. **A* 尋路與阻抗測試**：
+     - 西進欲回西出發車道：A* 精確選用 `lane_-2_0_E -> lane_0_0_W_to_W -> lane_-2_0_W`，成功標記 `isUTurn: true`。
+     - 常態直行車道：A* 始終選用最短直線車道 `lane_0_0_N_to_S`，絕不誤入 U-Turn。
+  3. **十字路口擴充測試**：
+     - 新增東側車道後，中心路塊即時重構為 `FourWay`，4 條迴轉車道（含 `E_to_E`）全部就緒且雙向連通。
+  4. **對向衝突主動禮讓測試**：
+     - 迴轉車偵測到對向直行車進入衝突區時，動態施加減速（速度自 4.0 降至 3.65 並準備停等）。
+     - 對向車離開路口後，迴轉車動態提速（升至 4.1）並順利完成迴轉。
+  5. **全流程實車動態運動學測試**：
+     - 車輛在 22 個步進內由西向進入、平滑轉向（$90^\circ \to 254.4^\circ \to 270^\circ$）、車身角度連續變化無 NaN、無突然 180° 翻轉，平穩抵達下游並觸發 `Arrived`。
+  6. **既有功能無回歸測試**：
+     - 市民隨機通勤按鈕與工廠內部人數更新運作如常。
+- **Git 狀態**：維持工作區變更，**嚴格未建立任何額外 GIT 提交**。
+
+
 

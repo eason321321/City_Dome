@@ -165,43 +165,10 @@ export class RoadTextureFactory {
     const roadInnerW = 512 - swPx * 2; // 車道內寬 (400px)
 
     // 繪製純白枕木紋（Sleeper Stripes，無任何綠色襯底，底色即為標準瀝青路面）
-    const drawSleeperZebra = (
-      boxX: number,
-      boxY: number,
-      boxW: number,
-      boxH: number,
-      isVerticalFlow: boolean
-    ) => {
-      ctx.fillStyle = '#ffffff';
-      const stripeCount = 9;
-      if (isVerticalFlow) {
-        const barW = 22;
-        const gap = (boxW - barW * stripeCount) / (stripeCount + 1);
-        for (let i = 0; i < stripeCount; i++) {
-          const x = boxX + gap + i * (barW + gap);
-          ctx.fillRect(x, boxY + 4, barW, boxH - 8);
-        }
-      } else {
-        const barH = 22;
-        const gap = (boxH - barH * stripeCount) / (stripeCount + 1);
-        for (let i = 0; i < stripeCount; i++) {
-          const y = boxY + gap + i * (barH + gap);
-          ctx.fillRect(boxX + 4, y, boxW - 8, barH);
-        }
-      }
-    };
-
-    // 北側斑馬線 (y: 0~56px)
-    drawSleeperZebra(swPx, 0, roadInnerW, swPx, true);
-
-    // 南側斑馬線 (y: 456~512px)
-    drawSleeperZebra(swPx, 512 - swPx, roadInnerW, swPx, true);
-
-    // 西側斑馬線 (x: 0~56px)
-    drawSleeperZebra(0, swPx, swPx, roadInnerW, false);
-
-    // 東側斑馬線 (x: 456~512px)
-    drawSleeperZebra(512 - swPx, swPx, swPx, roadInnerW, false);
+    this.drawSleeperZebra(ctx, swPx, 0, roadInnerW, swPx, true);
+    this.drawSleeperZebra(ctx, swPx, 512 - swPx, roadInnerW, swPx, true);
+    this.drawSleeperZebra(ctx, 0, swPx, swPx, roadInnerW, false);
+    this.drawSleeperZebra(ctx, 512 - swPx, swPx, swPx, roadInnerW, false);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.anisotropy = 4;
@@ -210,8 +177,38 @@ export class RoadTextureFactory {
   }
 
   /**
+   * 輔助函式：繪製標準枕木紋斑馬線（行人穿越道）
+   */
+  private static drawSleeperZebra(
+    ctx: CanvasRenderingContext2D,
+    boxX: number,
+    boxY: number,
+    boxW: number,
+    boxH: number,
+    isVerticalFlow: boolean
+  ): void {
+    ctx.fillStyle = '#ffffff';
+    const stripeCount = 9;
+    if (isVerticalFlow) {
+      const barW = 22;
+      const gap = (boxW - barW * stripeCount) / (stripeCount + 1);
+      for (let i = 0; i < stripeCount; i++) {
+        const x = boxX + gap + i * (barW + gap);
+        ctx.fillRect(x, boxY + 4, barW, boxH - 8);
+      }
+    } else {
+      const barH = 22;
+      const gap = (boxH - barH * stripeCount) / (stripeCount + 1);
+      for (let i = 0; i < stripeCount; i++) {
+        const y = boxY + gap + i * (barH + gap);
+        ctx.fillRect(boxX + 4, y, boxW - 8, barH);
+      }
+    }
+  }
+
+  /**
    * 3. T 字路口（Three-Way Junction）紋理
-   * 依指示：直線貫通部分為車流高速直通區，不設斑馬線；僅在支線進入處設置行人橫穿斑馬線
+   * 直線貫通車道兩端（北口與南口）與支路口（東口）均配備完整行人穿越斑馬線
    * 配合 56px (0.22m) 縮窄後人行道與白霧線調整
    */
   public static getThreeWayTexture(): THREE.CanvasTexture {
@@ -222,20 +219,20 @@ export class RoadTextureFactory {
     const swPx = 56;
     const roadInnerW = 512 - swPx * 2;
 
-    // 1. 直線貫通車道（南北向直通）：中央雙黃線分向限制線
-    // 北側引道 (y: 0 ~ 140) 與南側引道 (y: 372 ~ 512)：標準雙黃實線（路段禁止超車與迴轉）
+    // 1. 直線貫通車道（南北向直通）：中央雙黃線分向限制線（止於兩側斑馬線前，絕不壓線）
+    // 北側引道 (y: swPx ~ 140) 與南側引道 (y: 372 ~ 512 - swPx)：標準雙黃實線（路段禁止超車與迴轉）
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 8;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(247, 0);
+    ctx.moveTo(247, swPx);
     ctx.lineTo(247, 140);
-    ctx.moveTo(265, 0);
+    ctx.moveTo(265, swPx);
     ctx.lineTo(265, 140);
     ctx.moveTo(247, 372);
-    ctx.lineTo(247, 512);
+    ctx.lineTo(247, 512 - swPx);
     ctx.moveTo(265, 372);
-    ctx.lineTo(265, 512);
+    ctx.lineTo(265, 512 - swPx);
     ctx.stroke();
 
     // 路口支線開口段 (y: 140 ~ 372)：轉化為雙黃虛線（開口引導，允許左轉與支線進出交會）
@@ -251,19 +248,15 @@ export class RoadTextureFactory {
     ctx.fillStyle = '#f1f5f9';
     ctx.fillRect(swPx + 2, 0, 8, 512);
 
-    // 東側直道白霧線（路口開口前後兩段）
-    ctx.fillRect(512 - swPx - 10, 0, 8, swPx);
-    ctx.fillRect(512 - swPx - 10, 512 - swPx, 8, swPx);
+    // 2. 繪製 T 字路口全向三條行人穿越道（斑馬線）：北口、南口與東側支路口
+    // 北側斑馬線 (y: 0~56px)
+    this.drawSleeperZebra(ctx, swPx, 0, roadInnerW, swPx, true);
 
-    // 2. 僅在支線路口（東側）繪製行人橫穿之枕木紋斑馬線（背景色為路面瀝青色）
-    const stripeCount = 9;
-    const barH = 22;
-    const gap = (roadInnerW - barH * stripeCount) / (stripeCount + 1);
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < stripeCount; i++) {
-      const y = swPx + gap + i * (barH + gap);
-      ctx.fillRect(512 - swPx + 4, y, swPx - 8, barH);
-    }
+    // 南側斑馬線 (y: 456~512px)
+    this.drawSleeperZebra(ctx, swPx, 512 - swPx, roadInnerW, swPx, true);
+
+    // 東側支路口斑馬線 (x: 456~512px)
+    this.drawSleeperZebra(ctx, 512 - swPx, swPx, swPx, roadInnerW, false);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.anisotropy = 4;

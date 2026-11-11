@@ -20,6 +20,7 @@ export interface ActiveVehicle {
   onArrived?: (vehicle: ActiveVehicle) => void; // 抵達終點之業務回調 (傳入自身實體)
   currentLaneId?: string;    // 當前行駛所在之車道 ID (供車道隊列管理)
   distToLaneExit?: number;   // 距離當前車道出口之剩餘累積距離 (m)
+  isHoldingForBoxClearance?: boolean; // 是否正因路口淨空防死鎖機制在停止線停等
 }
 
 export interface LaneVehicleEntry {
@@ -443,11 +444,68 @@ export class VehicleManager {
         }
       }
 
-      // 4.2 計算紅綠燈號誌之安全速限與最大允許位移
+      // 4.2 檢測路口淨空狀態（"Don't Block the Box" / 黃網線防死鎖機制）
+      // 當自車尚未進入路口且前方有路口停止線時，若下游出境路段被車輛回堵或空間不足，嚴禁駛入路口
+      let isBoxBlocked = false;
+      const isApproachingIntersection = nextStopLineIndex !== -1 &&
+        (!rwps[v.currentWaypointIndex].isIntersection || rwps[v.currentWaypointIndex].intersectionKey !== rwps[nextStopLineIndex].intersectionKey);
+
+      if (isApproachingIntersection && distToStopLine <= VehicleManager.LOOKAHEAD_DISTANCE) {
+        // 尋找該路口出境點 (走出路口範圍的第一個航點)
+        let intersectionExitWpIndex = nextStopLineIndex;
+        for (let k = nextStopLineIndex; k < rwps.length; k++) {
+          if (rwps[k].isIntersection) {
+            intersectionExitWpIndex = k;
+          } else if (k > nextStopLineIndex) {
+            intersectionExitWpIndex = k;
+            break;
+          }
+        }
+
+        // 計算自當前車輛行駛至路口完全出境的累計距離
+        let distInsideBox = 0;
+        for (let k = nextStopLineIndex; k < intersectionExitWpIndex; k++) {
+          distInsideBox += rwps[k].position.distanceTo(rwps[k + 1].position);
+        }
+        const distToBoxExit = distToStopLine + distInsideBox;
+
+        // 條件 A: 探測前方在途前車，若前車停等/減速慢行且自車預估煞停點仍位於路口內
+        const leadForBox = this.findLeadVehicle(v, distToBoxExit + 4.0);
+        if (leadForBox && leadForBox.leadVehicle.speed <= 2.0) {
+          const projectedStopDist = leadForBox.distance - VehicleManager.MIN_FOLLOWING_DIST;
+          if (projectedStopDist < distToBoxExit + 0.35) {
+            isBoxBlocked = true;
+          }
+        }
+
+        // 條件 B: 檢查下游目標車道隊列尾端空間
+        const exitWp = rwps[intersectionExitWpIndex];
+        const downstreamLaneId = exitWp?.laneId;
+        if (!isBoxBlocked && downstreamLaneId && downstreamLaneId !== v.currentLaneId) {
+          const downstreamQueue = this.laneQueues.get(downstreamLaneId);
+          if (downstreamQueue && downstreamQueue.length > 0) {
+            const tailEntry = downstreamQueue[downstreamQueue.length - 1];
+            if (tailEntry.vehicle.speed <= 2.0) {
+              const nextLane = this.roadNetwork.getAllLanes().get(downstreamLaneId);
+              const nextLaneLen = nextLane ? this.getLaneLength(nextLane) : 2.0;
+              const spaceAvailable = Math.max(0, nextLaneLen - tailEntry.distToExit);
+              if (spaceAvailable < VehicleManager.VEHICLE_LENGTH + VehicleManager.STOPPING_GAP + 0.15) {
+                isBoxBlocked = true;
+              }
+            }
+          }
+        }
+      }
+
+      v.isHoldingForBoxClearance = isBoxBlocked && !isRedOrYellow;
+
+      // 4.3 計算紅綠燈號誌與路口淨空之安全速限與最大允許位移
       let targetSpeedForSignal = v.targetSpeed;
       let maxSignalMove = Infinity;
 
-      if (isRedOrYellow && nextStopLineIndex !== -1) {
+      const mustHoldAtStopLine = (isRedOrYellow || isBoxBlocked) && nextStopLineIndex !== -1 && isApproachingIntersection;
+
+      if (mustHoldAtStopLine) {
         const remainingDistToStopLine = Math.max(0, distToStopLine - VehicleManager.STOP_LINE_BUFFER);
         maxSignalMove = remainingDistToStopLine;
 
@@ -486,29 +544,84 @@ export class VehicleManager {
         }
       }
 
-      // 4.4 融合號誌約束與跟車約束
-      const desiredSpeed = Math.min(v.targetSpeed, targetSpeedForSignal, targetSpeedForLead);
-      const maxAllowedMove = Math.min(maxSignalMove, maxLeadMove);
+      // 4.4 迴轉車輛路口衝突禮讓 (Yield to Oncoming Traffic)
+      // 在 T 字與十字路口，迴轉車輛路權最低，若對向有直行車流必須主動在路口前或路口內減速禮讓
+      let targetSpeedForYield = v.targetSpeed;
+      let maxYieldMove = Infinity;
 
-      // 4.5 平滑加減速更新
+      const currLane = v.currentLaneId ? this.roadNetwork.getAllLanes().get(v.currentLaneId) : null;
+      let uTurnLane: DirectedLane | null = currLane?.isUTurn ? currLane : null;
+
+      if (!uTurnLane) {
+        // 若自車當前在進路口前，探測前方即將進入之車道是否為迴轉車道
+        for (let k = v.currentWaypointIndex; k < Math.min(v.currentWaypointIndex + 6, rwps.length); k++) {
+          const lid = rwps[k].laneId;
+          const l = lid ? this.roadNetwork.getAllLanes().get(lid) : null;
+          if (l?.isUTurn) {
+            uTurnLane = l;
+            break;
+          }
+        }
+      }
+
+      if (uTurnLane && uTurnLane.intersectionKey) {
+        const interKey = uTurnLane.intersectionKey;
+        let opposingPrefix = '';
+        if (uTurnLane.id.includes('_N_to_N')) opposingPrefix = '_S_to_';
+        else if (uTurnLane.id.includes('_S_to_S')) opposingPrefix = '_N_to_';
+        else if (uTurnLane.id.includes('_E_to_E')) opposingPrefix = '_W_to_';
+        else if (uTurnLane.id.includes('_W_to_W')) opposingPrefix = '_E_to_';
+
+        if (opposingPrefix) {
+          for (const other of this.vehicles) {
+            if (other === v || other.state === 'Arrived') continue;
+            const otherLaneId = other.currentLaneId ?? '';
+            const otherLane = this.roadNetwork.getAllLanes().get(otherLaneId);
+            if (otherLane?.isUTurn) continue; // 兩台迴轉車互不干擾各自轉向
+
+            const otherInSameInter = (otherLane?.intersectionKey === interKey && otherLaneId.includes(opposingPrefix));
+            const otherHeadingToInter = other.route.routeWaypoints.some(
+              (wp, idx) => idx >= other.currentWaypointIndex && idx <= other.currentWaypointIndex + 8 &&
+                           wp.intersectionKey === interKey && wp.laneId?.includes(opposingPrefix)
+            );
+
+            if (otherInSameInter || otherHeadingToInter) {
+              const distToOther = v.currentPosition.distanceTo(other.currentPosition);
+              if (distToOther < 3.2) {
+                targetSpeedForYield = 0;
+                maxYieldMove = Math.max(0, distToOther - 1.2);
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // 4.5 融合號誌約束、跟車約束與迴轉禮讓約束
+      const desiredSpeed = Math.min(v.targetSpeed, targetSpeedForSignal, targetSpeedForLead, targetSpeedForYield);
+      const maxAllowedMove = Math.min(maxSignalMove, maxLeadMove, maxYieldMove);
+
+      // 4.6 平滑加減速更新
       if (v.speed > desiredSpeed) {
         v.speed = Math.max(desiredSpeed, v.speed - v.deceleration * deltaTime);
       } else {
         v.speed = Math.min(desiredSpeed, v.speed + v.acceleration * deltaTime);
       }
 
-      // 4.6 狀態判定 (停等紅燈或跟車停等)
+      // 4.7 狀態判定 (停等紅燈、路口淨空停等、跟車停等或禮讓停等)
       const isStoppedForLight = isRedOrYellow && distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.08;
+      const isStoppedForBox = isBoxBlocked && distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.08;
       const isStoppedForCar = leadInfo !== null && leadInfo.leadVehicle.speed <= 0.05 && leadInfo.distance <= VehicleManager.MIN_FOLLOWING_DIST + 0.08;
+      const isWaitingYield = targetSpeedForYield === 0;
 
-      if (v.speed <= 0.05 && (isStoppedForLight || isStoppedForCar)) {
+      if (v.speed <= 0.05 && (isStoppedForLight || isStoppedForBox || isStoppedForCar || isWaitingYield)) {
         v.state = 'WaitingLight';
         v.speed = 0;
       } else {
         v.state = 'Cruising';
       }
 
-      // 4.7 沿著航點序列前進 (位移不超過 maxAllowedMove)
+      // 4.8 沿著航點序列前進 (位移不超過 maxAllowedMove)
       if (v.speed > 0) {
         let remainingMove = Math.min(v.speed * deltaTime, maxAllowedMove);
 

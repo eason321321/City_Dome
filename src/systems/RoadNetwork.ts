@@ -18,6 +18,7 @@ export interface DirectedLane {
   isIntersection: boolean;
   intersectionKey?: string;        // 若為路口車道，記錄所屬之 Intersection Key
   controllingSignal?: 'northSouth' | 'eastWest'; // 控制進入該車道之號誌
+  isUTurn?: boolean;               // 是否為 180° 迴轉車道
 }
 
 export interface IntersectionData {
@@ -688,6 +689,7 @@ export class RoadNetwork {
                 connectedNextLaneIds: [],
                 speedLimit: 8.3,
                 isIntersection: false,
+                isUTurn: true,
               };
               tile.lanes.push(uTurnN);
               this.allLanes.set(uTurnN.id, uTurnN);
@@ -705,6 +707,7 @@ export class RoadNetwork {
                 connectedNextLaneIds: [],
                 speedLimit: 8.3,
                 isIntersection: false,
+                isUTurn: true,
               };
               tile.lanes.push(uTurnS);
               this.allLanes.set(uTurnS.id, uTurnS);
@@ -765,6 +768,7 @@ export class RoadNetwork {
                 connectedNextLaneIds: [],
                 speedLimit: 8.3,
                 isIntersection: false,
+                isUTurn: true,
               };
               tile.lanes.push(uTurnE);
               this.allLanes.set(uTurnE.id, uTurnE);
@@ -782,6 +786,7 @@ export class RoadNetwork {
                 connectedNextLaneIds: [],
                 speedLimit: 8.3,
                 isIntersection: false,
+                isUTurn: true,
               };
               tile.lanes.push(uTurnW);
               this.allLanes.set(uTurnW.id, uTurnW);
@@ -912,6 +917,32 @@ export class RoadNetwork {
           this.allLanes.set(lane.id, lane);
         };
 
+        // 建立 180° 淚滴形 (Teardrop Curve) 平滑迴轉車道
+        const addIntersectionUTurnLane = (
+          id: string,
+          entryDir: 'N' | 'S' | 'E' | 'W',
+          wps: THREE.Vector3[],
+          ctrlSignal: 'northSouth' | 'eastWest'
+        ) => {
+          const lane: DirectedLane = {
+            id,
+            tileKey: tile.key,
+            direction: entryDir,
+            entryPoint: wps[0],
+            centerPoint: wps[Math.floor(wps.length / 2)],
+            exitPoint: wps[wps.length - 1],
+            waypoints: wps,
+            connectedNextLaneIds: [],
+            speedLimit: 6.5, // 23 km/h 迴轉安全慢行
+            isIntersection: true,
+            intersectionKey: tile.key,
+            controllingSignal: ctrlSignal,
+            isUTurn: true,
+          };
+          tile.lanes.push(lane);
+          this.allLanes.set(lane.id, lane);
+        };
+
         // 入口點定義 (Inbound) - 置中於 0.325m
         const inN = new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 1.0);
         const inS = new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 1.0);
@@ -929,6 +960,18 @@ export class RoadNetwork {
           if (hasS) addIntersectionLane(`lane_${gx}_${gz}_N_to_S`, 'S', inN, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz), outS, 'northSouth');
           if (hasW) addIntersectionLane(`lane_${gx}_${gz}_N_to_W`, 'W', inN, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - LANE_OFFSET), outW, 'northSouth');
           if (hasE) addIntersectionLane(`lane_${gx}_${gz}_N_to_E`, 'E', inN, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + LANE_OFFSET), outE, 'northSouth');
+
+          // 北進 180° 迴轉車道 (N_to_N)
+          const uWpsN = [
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 1.0),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - 0.25),
+            new THREE.Vector3(gx - 0.16, 0.04, gz + 0.18),
+            new THREE.Vector3(gx, 0.04, gz + 0.28),
+            new THREE.Vector3(gx + 0.16, 0.04, gz + 0.18),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - 0.25),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - 1.0),
+          ];
+          addIntersectionUTurnLane(`lane_${gx}_${gz}_N_to_N`, 'N', uWpsN, 'northSouth');
         }
 
         // 從南進入 (受南北向號誌控制)
@@ -936,6 +979,18 @@ export class RoadNetwork {
           if (hasN) addIntersectionLane(`lane_${gx}_${gz}_S_to_N`, 'N', inS, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz), outN, 'northSouth');
           if (hasE) addIntersectionLane(`lane_${gx}_${gz}_S_to_E`, 'E', inS, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + LANE_OFFSET), outE, 'northSouth');
           if (hasW) addIntersectionLane(`lane_${gx}_${gz}_S_to_W`, 'W', inS, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - LANE_OFFSET), outW, 'northSouth');
+
+          // 南進 180° 迴轉車道 (S_to_S)
+          const uWpsS = [
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 1.0),
+            new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + 0.25),
+            new THREE.Vector3(gx + 0.16, 0.04, gz - 0.18),
+            new THREE.Vector3(gx, 0.04, gz - 0.28),
+            new THREE.Vector3(gx - 0.16, 0.04, gz - 0.18),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + 0.25),
+            new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + 1.0),
+          ];
+          addIntersectionUTurnLane(`lane_${gx}_${gz}_S_to_S`, 'S', uWpsS, 'northSouth');
         }
 
         // 從東進入 (受東西向號誌控制)
@@ -943,6 +998,18 @@ export class RoadNetwork {
           if (hasW) addIntersectionLane(`lane_${gx}_${gz}_E_to_W`, 'W', inE, new THREE.Vector3(gx, 0.04, gz - LANE_OFFSET), outW, 'eastWest');
           if (hasN) addIntersectionLane(`lane_${gx}_${gz}_E_to_N`, 'N', inE, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz - LANE_OFFSET), outN, 'eastWest');
           if (hasS) addIntersectionLane(`lane_${gx}_${gz}_E_to_S`, 'S', inE, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz - LANE_OFFSET), outS, 'eastWest');
+
+          // 東進 180° 迴轉車道 (E_to_E)
+          const uWpsE = [
+            new THREE.Vector3(gx + 1.0, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx + 0.25, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx - 0.18, 0.04, gz - 0.16),
+            new THREE.Vector3(gx - 0.28, 0.04, gz),
+            new THREE.Vector3(gx - 0.18, 0.04, gz + 0.16),
+            new THREE.Vector3(gx + 0.25, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx + 1.0, 0.04, gz + LANE_OFFSET),
+          ];
+          addIntersectionUTurnLane(`lane_${gx}_${gz}_E_to_E`, 'E', uWpsE, 'eastWest');
         }
 
         // 從西進入 (受東西向號誌控制)
@@ -950,6 +1017,18 @@ export class RoadNetwork {
           if (hasE) addIntersectionLane(`lane_${gx}_${gz}_W_to_E`, 'E', inW, new THREE.Vector3(gx, 0.04, gz + LANE_OFFSET), outE, 'eastWest');
           if (hasS) addIntersectionLane(`lane_${gx}_${gz}_W_to_S`, 'S', inW, new THREE.Vector3(gx - LANE_OFFSET, 0.04, gz + LANE_OFFSET), outS, 'eastWest');
           if (hasN) addIntersectionLane(`lane_${gx}_${gz}_W_to_N`, 'N', inW, new THREE.Vector3(gx + LANE_OFFSET, 0.04, gz + LANE_OFFSET), outN, 'eastWest');
+
+          // 西進 180° 迴轉車道 (W_to_W)
+          const uWpsW = [
+            new THREE.Vector3(gx - 1.0, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx - 0.25, 0.04, gz + LANE_OFFSET),
+            new THREE.Vector3(gx + 0.18, 0.04, gz + 0.16),
+            new THREE.Vector3(gx + 0.28, 0.04, gz),
+            new THREE.Vector3(gx + 0.18, 0.04, gz - 0.16),
+            new THREE.Vector3(gx - 0.25, 0.04, gz - LANE_OFFSET),
+            new THREE.Vector3(gx - 1.0, 0.04, gz - LANE_OFFSET),
+          ];
+          addIntersectionUTurnLane(`lane_${gx}_${gz}_W_to_W`, 'W', uWpsW, 'eastWest');
         }
       }
     }
