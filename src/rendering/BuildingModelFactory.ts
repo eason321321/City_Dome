@@ -654,7 +654,7 @@ export class BuildingModelFactory {
         lotDepth: 2,
         capacity: 2,
         description: '小巧溫馨的單層獨棟別墅，正面設有門廊與前庭步道。',
-        features: ['2 人居住容量 (2 People)', '面寬 2m · 縱深 2m', '經典人字斜屋頂', '精巧前庭花圃'],
+        features: ['2 人居住容量 (2 People)', '面寬 2 格 · 縱深 2 格 (1m × 1m)', '經典人字斜屋頂', '精巧前庭花圃'],
       },
       {
         id: 'Residential_2x3',
@@ -664,7 +664,7 @@ export class BuildingModelFactory {
         lotDepth: 3,
         capacity: 2,
         description: '窄面寬、大縱深的長型英式小屋，正面朝馬路，後方自帶景觀後庭花園。',
-        features: ['2 人居住容量 (2 People)', '窄面寬 2m · 縱深 3m', '紅磚瓦長條斜屋頂', '自帶後花園景觀樹'],
+        features: ['2 人居住容量 (2 People)', '窄面寬 2 格 · 縱深 3 格 (1m × 1.5m)', '紅磚瓦長條斜屋頂', '自帶後花園景觀樹'],
       },
       {
         id: 'Residential_3x2',
@@ -674,7 +674,7 @@ export class BuildingModelFactory {
         lotDepth: 2,
         capacity: 2,
         description: '面寬寬敞、淺縱深之美式平房，正面設有寬大門廊立柱與左右雙採光橫窗。',
-        features: ['2 人居住容量 (2 People)', '寬面寬 3m · 淺縱深 2m', '雙立柱玄關門廊', '大橫向採光窗'],
+        features: ['2 人居住容量 (2 People)', '寬面寬 3 格 · 淺縱深 2 格 (1.5m × 1m)', '雙立柱玄關門廊', '大橫向採光窗'],
       },
       {
         id: 'Residential_3x3',
@@ -684,7 +684,7 @@ export class BuildingModelFactory {
         lotDepth: 3,
         capacity: 3,
         description: '雙層雅致現代家庭別墅，一樓配置獨立車庫與客廳，二樓為臥室。',
-        features: ['3 人居住容量 (3 People / 3p)', '面寬 3m · 縱深 3m', '附設單車位車庫', '雙層樓次層次設計'],
+        features: ['3 人居住容量 (3 People / 3p)', '面寬 3 格 · 縱深 3 格 (1.5m × 1.5m)', '附設單車位車庫', '雙層樓次層次設計'],
       },
       {
         id: 'Residential_4x4',
@@ -694,28 +694,45 @@ export class BuildingModelFactory {
         lotDepth: 4,
         capacity: 4,
         description: '豪華氣派大型莊園別墅，複合式斜屋頂、雙車位車庫、八角凸窗與前後雙景觀庭院。',
-        features: ['4 人居住容量 (4 People / 4p)', '面寬 4m · 縱深 4m', '宏偉挑高門廊柱', '複合斜屋頂與私家庭院'],
+        features: ['4 人居住容量 (4 People / 4p)', '面寬 4 格 · 縱深 4 格 (2m × 2m)', '宏偉挑高門廊柱', '複合斜屋頂與私家庭院'],
       },
     ];
   }
 
   /**
    * 根據 ID 建立房屋實體模型
+   * 因土地格位改為 0.5m x 0.5m (面積變為四分之一)，模型等比縮小 0.5 (底面積四分之一)
    */
   public static createBuildingById(id: string): THREE.Group | null {
+    let building: THREE.Group | null = null;
     switch (id) {
       case 'Residential_2x2':
-        return this.createResidential_2x2();
+        building = this.createResidential_2x2();
+        break;
       case 'Residential_2x3':
-        return this.createResidential_2x3();
+        building = this.createResidential_2x3();
+        break;
       case 'Residential_3x2':
-        return this.createResidential_3x2();
+        building = this.createResidential_3x2();
+        break;
       case 'Residential_3x3':
-        return this.createResidential_3x3();
+        building = this.createResidential_3x3();
+        break;
       case 'Residential_4x4':
-        return this.createResidential_4x4();
+        building = this.createResidential_4x4();
+        break;
       default:
         return null;
     }
+
+    if (building) {
+      // 縮小為四分之一 (X, Y, Z 各 0.5，底面積與各格位完全貼合)
+      building.scale.set(0.5, 0.5, 0.5);
+      const rootWrapper = new THREE.Group();
+      rootWrapper.name = `${id}_RootWrapper`;
+      rootWrapper.add(building);
+      return rootWrapper;
+    }
+    return null;
   }
 }

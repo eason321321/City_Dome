@@ -330,7 +330,8 @@ export class RoadNetwork {
 
   /**
    * 重建本格位的立體高架人行道實體
-   * 人行道寬度 0.35m，高度比車道高出 0.035m，具備獨立混凝土方磚材質與投影
+   * 人行道寬度 0.22m，高度比車道高出 0.035m，具備獨立混凝土方磚材質與投影
+   * (配合路邊停車需求縮窄人行道，車輛停於 0.62m 處 [0.52m~0.72m]，人行道自 0.78m 展開，保留 6cm 充足路緣退縮淨距)
    */
   private updateSidewalkMeshes(tile: RoadTile): void {
     tile.sidewalkGroup.clear();
@@ -340,6 +341,8 @@ export class RoadNetwork {
     const swMat = RoadTextureFactory.getSidewalkMaterial();
     const swHeight = 0.07;
     const swPosY = 0.035; // 頂部高達 0.07m (比車道 0.035m 高出 0.035m，形成真實路緣階梯)
+    const swWidth = 0.22; // 縮窄後人行道寬度 0.22m (覆蓋 0.78m ~ 1.00m)
+    const swCenter = 0.89; // 人行道中心線 (1.00 - 0.11 = 0.89m)
 
     const addBox = (w: number, d: number, localX: number, localZ: number) => {
       const geo = new THREE.BoxGeometry(w, swHeight, d);
@@ -353,36 +356,36 @@ export class RoadNetwork {
     switch (tile.type) {
       case 'Straight':
       case 'DeadEnd':
-        // 直線道路與路段末端：兩側各寬 0.35m 之高架立體人行道，車道中間 1.3m 全程暢通（絕不產生橫向人行道阻擋）
-        addBox(0.35, 2.0, -0.825, 0);
-        addBox(0.35, 2.0, +0.825, 0);
+        // 直線道路與路段末端：兩側各寬 0.22m 之高架立體人行道，車道中間 1.56m 全程暢通（絕不產生橫向人行道阻擋）
+        addBox(swWidth, 2.0, -swCenter, 0);
+        addBox(swWidth, 2.0, +swCenter, 0);
         break;
 
       case 'FourWay':
-        // 十字路口四個轉角處的人行廣場小平台 (0.35m x 0.35m)
-        // 斑馬線緊貼於四角平台之間，斑馬線寬度與人行道完全一致 (0.35m)
-        addBox(0.35, 0.35, -0.825, -0.825);
-        addBox(0.35, 0.35, +0.825, -0.825);
-        addBox(0.35, 0.35, -0.825, +0.825);
-        addBox(0.35, 0.35, +0.825, +0.825);
+        // 十字路口四個轉角處的人行廣場小平台 (0.22m x 0.22m)
+        // 斑馬線緊貼於四角平台之間，斑馬線寬度與人行道完全一致 (0.22m)
+        addBox(swWidth, swWidth, -swCenter, -swCenter);
+        addBox(swWidth, swWidth, +swCenter, -swCenter);
+        addBox(swWidth, swWidth, -swCenter, +swCenter);
+        addBox(swWidth, swWidth, +swCenter, +swCenter);
         break;
 
       case 'ThreeWay':
         // T 字路口：西側為直線貫通高架人行道，東側兩角為支線兩旁之人行廣場小平台
         // 直線部分車道全程暢通，僅支線設有橫跨車道之人行穿越道
-        addBox(0.35, 2.0, -0.825, 0);
-        addBox(0.35, 0.35, +0.825, -0.825);
-        addBox(0.35, 0.35, +0.825, +0.825);
+        addBox(swWidth, 2.0, -swCenter, 0);
+        addBox(swWidth, swWidth, +swCenter, -swCenter);
+        addBox(swWidth, swWidth, +swCenter, +swCenter);
         break;
 
       case 'Corner':
         // 轉彎道外側連續高架人行道 (覆蓋西側與北側，無縫銜接相鄰兩條車道外側人行道)
-        addBox(0.35, 2.0, -0.825, 0);
-        addBox(1.65, 0.35, 0.175, -0.825);
+        addBox(swWidth, 2.0, -swCenter, 0);
+        addBox(2.0 - swWidth, swWidth, swWidth / 2, -swCenter);
         // 外側轉角梯形/方形補齊 (填滿外側轉角至外弧半徑處)
-        addBox(0.5, 0.5, -0.4, -0.4);
+        addBox(0.4, 0.4, -0.45, -0.45);
         // 轉彎道內側轉角人行道 (精準連接相鄰兩條車道內側人行道)
-        addBox(0.35, 0.35, +0.825, +0.825);
+        addBox(swWidth, swWidth, +swCenter, +swCenter);
         break;
     }
   }
@@ -491,8 +494,8 @@ export class RoadNetwork {
   private rebuildLaneGraph(): void {
     this.allLanes.clear();
 
-    // 車道中心線偏移行車距（車道淨寬 0.65m，中心點位於對向黃線 0m 與外側白線 0.65m 之正中間 0.325m）
-    const LANE_OFFSET = 0.325;
+    // 車道中心線偏移行車距（配合路邊停車空間規劃，行車線中心設為 0.28m，行車通道佔 0.18m~0.38m，與路緣石旁 0.62m 停車區保持 14cm 充足安全淨距，絕不碰撞）
+    const LANE_OFFSET = 0.28;
 
     // 1. 為每個格位建立車道有向圖實體
     for (const tile of this.tiles.values()) {

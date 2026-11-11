@@ -10,6 +10,7 @@ export type PauseChangeListener = (isPaused: boolean) => void;
 export class TimeManager {
   private time: WorldTime;
   private isPaused: boolean = false;
+  private timeScale: number = 1.0; // 遊戲模擬速度倍率 (預設 1.0x，未來支援加速功能 2x, 3x, 5x 等)
   private virtualSecondsAccumulator: number = 0;
   
   // 1 實際秒 = 6 虛擬分鐘 (即 10 實際秒 = 1 虛擬小時)
@@ -35,6 +36,23 @@ export class TimeManager {
 
   public getIsPaused(): boolean {
     return this.isPaused;
+  }
+
+  public getTimeScale(): number {
+    return this.timeScale;
+  }
+
+  public setTimeScale(scale: number): void {
+    this.timeScale = Math.max(0, scale);
+  }
+
+  /**
+   * 計算該幀之模擬時間增量 (Game Simulation Delta)
+   * 若遊戲暫停則為 0；若遊戲加速則乘上倍率
+   */
+  public getSimulationDelta(realDelta: number): number {
+    if (this.isPaused || realDelta <= 0) return 0;
+    return realDelta * this.timeScale;
   }
 
   public togglePause(): boolean {
@@ -99,8 +117,9 @@ export class TimeManager {
   public update(deltaTime: number): void {
     if (this.isPaused || deltaTime <= 0) return;
 
+    const simDelta = deltaTime * this.timeScale;
     this.time.totalTicks++;
-    this.virtualSecondsAccumulator += deltaTime * this.virtualSecondsPerRealSecond;
+    this.virtualSecondsAccumulator += simDelta * this.virtualSecondsPerRealSecond;
 
     let hasChanged = false;
 

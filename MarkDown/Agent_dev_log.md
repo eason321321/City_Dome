@@ -659,6 +659,244 @@
 - **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯與 Vite 打包 0 錯誤、0 警告。
 - **Git 版本**：完成暫存並提交 Git Commit。
 
+---
+
+## [2026-11-10] 第 27 輪作業：完善住房入住機制與三階段配對佇列清單
+
+### 本輪更新摘要
+- **目標**：
+  - 開發者指示：完善住房入住機制，落實「1. 產生需求 -> 2. 配對需求 -> 3. 配對成功入住 / 失敗流失」三階段管線。
+  - 需求具體規格：
+    1. 人數：1 - 5 人（支援隨機產生與 1-5 人快速按鈕）。
+    2. 入住方式：隨機選擇「併入別人 (合居 `joinExisting`)」或「建立新房屋 (`buildNew`)」。
+    3. 住宅密度：目前為低密度住宅（`'Low'`）。
+    4. 偏好房型：自現有房型（2x2, 2x3, 3x2, 3x3, 4x4）中隨機抽取 2 款作為可接受之偏好房型。
+  - 配對條件與規則：
+    1. **併入別人 (合居)**：
+       - 條件 1-1：篩選現有候選房屋（需求密度符合、房型在偏好內、剩餘容量 $\ge$ 需求人數、且房屋必須為完工狀態 `status === 'completed'`，建造中不可作為候選）。
+       - 條件 1-2：候選房屋隨機洗牌，逐一擲 50% 媒合意願，首個通過即入住，全數未過則配對失敗流失。
+       - 成功：`registeredResidents += peopleCount`，派遣市民車輛自公路開車遷入，車到門前消失正式記入 `currentOccupants` 與城市總人口。
+    2. **建立新房屋**：
+       - 排除容量不足與密度不符之房型。
+       - 自符合之偏好房型隨機指定順序檢查合適建地（屬於住宅區、空間放得下、正面貼路、已連通外聯道路、未被佔用/預留）。若第一偏好無法滿足則檢查第二偏好；皆無可用建地則配對失敗流失。
+       - 成功：起建房屋（鷹架與警示燈升起動畫 6 秒），完工時開車自公路遷入，車到消失後正式增加人口。
+    3. **移除重複外聯道路檢查**：因在選地判定時已完整檢驗 `hasPathFromHighway(roadKey)`，後續無須重複強制檢驗。
+  - 需求清單介面：在開發者工具箱（DevMenu）建立需求歷史滾動清單，最新需求置頂顯示。
+  - 遵守約束：**不建立 GIT 版本**。
+
+### 本輪異動檔案清單
+1. `src/systems/BuildingManager.ts`：
+   - 定義 `HousingDemand`、`HousingDensity`、`MoveInType`、`DemandStatus` 介面。
+   - 新增 `demandQueue` 需求清單與歷史維護機制。
+   - 實作 `generateRandomDemand(forcedPeopleCount)`：產生符合規格之隨機需求（1-5人、50/50入住方式、2個隨機偏好房型）。
+   - 實作 `matchJoinExisting`：嚴格判定完工房屋篩選（密度/偏好/容量）與隨機洗牌 50% 投擲。
+   - 實作 `matchBuildNew`：排除容量不足房型、雙偏好依序土地檢驗與起建。
+   - 實作 `findSiteForModel`：整合住宅區、空間正面貼路、外聯道路連通與佔用檢查。
+   - 實作 `dispatchCitizenVehicle(building, arrivingCount)`：支援完工首批遷入與後續合居追加遷入，車輛抵達家門消失時精準增加 `currentOccupants`。
+2. `src/ui/DevMenu.ts`：
+   - 房屋需求分頁介面升級：新增「🎲 產生隨機需求 (1-5人/隨機偏好)」主按鈕與 ➕1人至➕5人快速按鈕。
+   - 新增「📋 需求歷史清單 (最新在最上方)」滾動卡片，顯示每筆需求之 ID、人數、入住方式、偏好房型、配對結果或流失原因。
+3. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：記錄本輪開發日誌、技術細節與決策。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 與 Vite 打包 0 錯誤、0 警告，2.04 秒順利完成。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交。
+
+---
+
+## [2026-11-10] 第 28 輪作業：房屋建造時間增為 3 倍（遊戲時間解耦）與全動態作業塔吊施工吊臂
+
+### 本輪更新摘要
+- **目標**：
+  1. **房屋建造時間改為原先的 3 倍**：原為 6.0 秒，調整為 18.0 秒。
+  2. **建造時間以「遊戲時間 (Game Simulation Time)」計算**：
+     - 將建築推進、吊臂作業動畫、警示燈閃爍全面與遊戲模擬時間（`simDelta`）解耦。
+     - 在 `TimeManager.ts` 中導入 `timeScale`（速度倍率）與 `getSimulationDelta(realDelta)`，當遊戲暫停時時間增量歸零（建造與吊臂瞬間停格），當後續加入遊戲加速功能（2x, 3x 等）時，建造時間按倍率等比縮短。
+  3. **建造期間全動態作業施工塔吊（Tower Crane）**：
+     - 設計並以程序化低多邊形（Procedural Low-Poly）組裝逼真的工地旋轉塔式起重機。
+     - 具備地基錨定底板、黃色角鋼桁架立柱塔身、斜撐腹桿、迴轉台、全景視野駕駛室、A 型頂尖塔架與航空紅色警示防撞燈。
+     - 配置後方平衡臂與水泥平衡配重塊、以及前方主作業三角格構吊臂。
+     - 具備變幅滑動小車（Trolley）、起升鋼纜、滑輪吊鉤、以及吊掛作業中的建築大型工字鋼樑（I-Beam Bundle）並帶有真實慣性微幅擺動。
+     - 在施工循環中，吊臂平滑迴轉掃動、載重小車沿臂滑移、鋼纜升降吊料、塔頂與鷹架信號燈按遊戲時間同步閃爍。完工時拆除鷹架與吊臂，並觸發市民車輛開車遷入。
+
+### 本輪異動檔案清單
+1. `src/simulation/TimeManager.ts`：新增 `timeScale` 屬性、`getTimeScale()`、`setTimeScale()` 及 `getSimulationDelta(realDelta)` 計算方法，並在 `update()` 中乘上速度倍率，奠定未來加速核心架構。
+2. `src/main.ts`：主循環中透過 `timeManager.getSimulationDelta(delta)` 計算模擬增量，統一驅動道路、車輛與建築管理器。
+3. `src/systems/BuildingManager.ts`：
+   - `PlacedBuilding` 新增 `craneRefs` 動態吊臂參照與動畫計時器。
+   - `constructionDuration` 自 6.0 秒調整為 18.0 秒。
+   - 實作 `createConstructionSiteMesh(w, d)`：整合鷹架、桁架塔吊、迴轉駕駛室、平衡配重、主吊臂、變幅小車、起升鋼纜與吊掛鋼樑。
+   - `update(deltaTime, isPaused)`：依據遊戲模擬時間推進建造進度、吊臂迴轉、小車變幅、鋼纜升降、鋼樑晃動與雙信號燈閃爍。
+   - 懸停 Tooltip 標註「建造中 · 吊臂作業中」與即時動態剩餘秒數。
+4. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`、`MarkDown/task_quene.md`：記錄開發歷程、技術細節與決策。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 與 Vite 打包 0 錯誤、0 警告，2.51 秒順利完成。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交。
+
+---
+
+## [2026-11-10] 第 29 輪作業：車輛尺寸減半、道路路邊停車機制與開發者路邊停車工具
+
+### 本輪更新摘要
+- **目標**：
+  1. **車輛尺寸減半 (Halve Vehicle Size)**：將所有車輛模型尺寸調整為原先的一半（scale 0.45）。
+  2. **道路路邊停車機制 (Curbside Parking System)**：
+     - 道路支援路邊停車，無需繪製停車格標線。
+     - 以程式碼嚴格約束禁止停車的區域：**路口（FourWay、ThreeWay）、轉角（Corner）與邊界高速公路（gz=97）一律禁止停車**。
+     - **行車路線嚴禁碰撞到停車區域**：精確推導幾何車道位置與停車空間，行車道軌跡與路邊停車區域間保留充足淨空安全緩衝帶，保證零碰撞。
+  3. **開發者工具箱停車生成工具 (DevMenu Curbside Parking Generator)**：
+     - 在 DevMenu 中建立「🅿️ 路邊停車」分頁。
+     - 支援滑鼠點選路邊即時生成停放車輛。
+     - 提供即時射線預覽：滑鼠懸停於合法路側顯示半透明青藍色 Ghost 車輛；懸停於路口或轉角顯示紅色 Ghost 車輛並顯示禁停原因。
+     - 提供「🎲 隨機停放 5 輛」與「🗑️ 清除所有停車」一鍵管理功能。
+
+### 本輪異動檔案清單
+1. `src/rendering/VehicleModelFactory.ts`：
+   - 將 `createVehicle` 的模型縮放由 `scale.set(0.9, 0.9, 0.9)` 調整為 `scale.set(0.45, 0.45, 0.45)`。
+   - 車寬縮小為 $\approx 0.198\text{m}$，車長縮小為 $\approx 0.369\text{m}$，所有移動車輛、市民遷入車、停放車等比減半。
+2. `src/systems/RoadNetwork.ts`：
+   - 調整 `rebuildLaneGraph` 中之 `LANE_OFFSET`，由 $0.325\text{m}$ 微調為 $0.28\text{m}$。
+   - 使行車軌跡包絡線位於 $[0.18\text{m}, 0.38\text{m}]$，路邊停車包絡線位於 $[0.52\text{m}, 0.72\text{m}]$，形成 $0.14\text{m}$（$14\text{cm}$）之絕對安全隔離緩衝帶，徹底杜絕碰撞。
+3. `src/simulation/ParkingManager.ts`（全新模組）：
+   - 管理路邊停放車輛實體生命週期。
+   - `canParkAtTile(tile)` 程式碼嚴格驗證：高速公路（`gz === 97`）、十字路口（`FourWay`）、T 字路口（`ThreeWay`）與轉角（`Corner`）禁止停車；僅允許一般直線道路（`Straight`）與死巷（`DeadEnd`）停放。
+   - `getCurbsideSpot(worldPoint)`：依道路方向與點擊側自動精準吸附於路邊（中心偏距 $0.62\text{m}$），車身順向或逆向貼緊路側，具備防重疊最小車距驗證（$0.46\text{m}$）。
+   - 支援 `spawnParkedCarAt`、`spawnRandomParkedCars`、`clearAllParkedCars` 與半透明 Ghost 預覽車生成。
+4. `src/main.ts`：
+   - 實例化 `ParkingManager` 並掛載至場景與路網，傳入 `DevMenu`。
+5. `src/ui/DevMenu.ts`：
+   - 新增第 4 分頁「🅿️ 路邊停車」。
+   - 實作「🎯 開啟路邊點選停車模式」切換開關，點選模式下釋放 RTS 左鍵拖曳，支援精準點選。
+   - 實作滑鼠移動 3D 射線吸附預覽與狀態顯示（合法綠光、路口紅光警示）。
+   - 實作隨機停放 5 輛與清除全城停車。
+6. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：同步登錄本輪開發紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 與 Vite 打包 0 錯誤、0 警告，2.28 秒順利完成。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交。
+
+---
+
+## [2026-11-10] 第 30 輪作業：土地劃分格位縮至四分之一 (0.5m x 0.5m)、延伸 8 格與建築物尺寸四分之一等比調整
+
+### 本輪更新摘要
+- **目標**：
+  1. **道路周圍生成小格子大小改為原先的四分之一**：
+     - 單個小格子邊長由 $1\text{m} \times 1\text{m}$ 調整為 $0.5\text{m} \times 0.5\text{m}$，底面積縮為 $0.25\text{m}^2$（原先的 $1/4$）。
+     - 道路向外延伸層數由 4 格增加為 **8 格**（向外總縱深維持 $8 \times 0.5\text{m} = 4\text{m}$）。
+     - 沿 $2\text{m}$ 道路塊長度方向由原先 2 格增加為 **4 格**（$4 \times 0.5\text{m} = 2\text{m}$）。
+  2. **建築物生成尺寸等比縮為四分之一**：
+     - 原先 2x2 格位建築（如 `Residential_2x2`）在 $0.5\text{m}$ 格位下佔地為 $1\text{m} \times 1\text{m}$，底面積為 $1\text{m}^2$（原 $4\text{m}^2$ 的四分之一）。
+     - 原先 4x4 格位建築在 $0.5\text{m}$ 格位下佔地為 $2\text{m} \times 2\text{m}$，底面積為 $4\text{m}^2$（原 $16\text{m}^2$ 的四分之一）。
+     - 3D 建築模型比例縮放為 $0.5$，完美填入新的小格子，與上一輪縮小為一半的車輛模型（$0.37\text{m} \times 0.20\text{m}$）達到真實都市微觀比例。
+  3. **施工現場、鷹架與塔式吊臂尺寸等比調適**：
+     - 施工鷹架框架長寬依建築實際米數尺寸緊密包裹，高度調適為 $0.95\text{m}$。
+     - 作業塔吊之立柱桁架、迴轉臂、載重小車、起升鋼纜與吊掛鋼樑等比縮放，動作與視覺層次更精細。
+  4. **嚴格保持道路正面貼合判定與中心坐標公式精確性**：
+     - 重新校準 `canFitModelAt`、`calculateFrontRoadPoint` 與 `spawnBuilding` 中 4 向（N/S/E/W）中心點與臨路檢驗公式，100% 貼齊路面邊界，零穿透、零懸空。
+
+### 本輪異動檔案清單
+1. `src/systems/ZoningManager.ts`：
+   - 導入 `CELL_SIZE = 0.5`，將 `ZONING_DEPTH` 擴充至 8。
+   - `sharedCellGeo` 幾何調整為 $0.46\text{m} \times 0.46\text{m}$，懸浮筆刷框 `hoverGeo` 調整為 $0.49\text{m} \times 0.49\text{m}$。
+   - `rebuildZoningGrid()` 依據 $0.5\text{m}$ 網格在東西南北四向向外延伸 8 層，每向每道路單元配置 4 格。
+   - `rebuildGridLinesMesh()` 乘上 `CELL_SIZE` 繪製密集且精緻的 3D 水藍色格線。
+   - `applyZoningAtWorldPos` 與滑鼠點選/拖曳塗抹射線精準映射至 $0.5\text{m}$ 網格座標。
+2. `src/rendering/BuildingModelFactory.ts`：
+   - 在 `createBuildingById` 中為所有建築模型添加根包裹群組並套用 `scale.set(0.5, 0.5, 0.5)`，使建築佔地面積精確縮小為原先的四分之一。
+   - 更新建築型錄描述與特徵標籤，標註各房型在新格位制下的實際米數（如 $1\text{m} \times 1\text{m}$、$1.5\text{m} \times 1.5\text{m}$、$2\text{m} \times 2\text{m}$）。
+3. `src/systems/BuildingManager.ts`：
+   - 引進 `CELL_SIZE = 0.5`。
+   - `canFitModelAt` 改以 $0.5\text{m}$ 步長逐格嚴格檢驗正面臨路與分區佔用。
+   - `calculateFrontRoadPoint` 與 `spawnBuilding` 中心點位運算套用 `CELL_SIZE` 因子，精準落位。
+   - `createConstructionSiteMesh(w, d)` 依實體米數建構縮放鷹架與作業吊臂。
+   - 建造升起動畫深度由 $-0.8\text{m}$ 調整為 $-0.4\text{m}$。
+4. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：登錄本輪開發紀錄。
+
+---
+
+## [2026-11-10] 第 31 輪作業：人行道縮窄至 0.22m、路緣石與路邊停車安全退縮淨距、斑馬線紋理同步調整
+
+### 本輪更新摘要
+- **目標**：落實開發者最新指示：
+  1. 「停車位置不變」：車輛中心線仍維持在離路中線 $0.62\text{m}$ 處（佔用空間 $[0.52\text{m}, 0.72\text{m}]$）。
+  2. 「把人行道縮更窄一點」：人行道寬度由原先的 $0.35\text{m}$ 縮窄為 $0.22\text{m}$（覆蓋 $[0.78\text{m}, 1.0\text{m}]$，中心在 $\pm 0.89\text{m}$），使停放車輛外側（$0.72\text{m}$）與立體人行道路緣石（$0.78\text{m}$）之間具備 $6\text{cm}$（$0.06\text{m}$）安全退縮淨距，徹底消除車體外緣侵入並重疊至人行道的視覺問題。
+  3. 「行人穿越斑馬線也要改一下」：配合人行道縮窄為 $0.22\text{m}$，路口（十字路口 FourWay、T 字路口 ThreeWay、轉彎道 Corner）之斑馬線寬度、長度、停止線與路面白霧線全面調整為 $56\text{px}$（$0.22\text{m}$），精確無縫接合四角縮窄後的 $0.22\text{m} \times 0.22\text{m}$ 人行道小平台。
+- **原則**：遵守不建立 GIT 版本約定，維持工作區未提交狀態；完成後執行 `npm.cmd run build` 嚴格驗證。
+
+### 本輪異動檔案清單
+1. `src/systems/RoadNetwork.ts` (`updateSidewalkMeshes`)：
+   - 定義 `swWidth = 0.22`，`swCenter = 0.89`。
+   - `Straight` / `DeadEnd`：直線道兩側立體高架人行道 Box 尺寸改為 `(0.22, 2.0)`，中心置於 $\pm 0.89\text{m}$。
+   - `FourWay`：四角人行小平台尺寸改為 `(0.22, 0.22)`，中心置於 $(\pm 0.89, \pm 0.89)$。
+   - `ThreeWay`：西側直通人行道寬度改為 $0.22\text{m}$，東側支線雙角平台改為 `(0.22, 0.22)`。
+   - `Corner`：外側直向人行道改為寬 $0.22\text{m}$、橫向人行道改為 `(1.78, 0.22, 0.11, -0.89)`，內角平台改為 `(0.22, 0.22, 0.89, 0.89)`。
+2. `src/rendering/RoadTextureFactory.ts`：
+   - `getStraightTexture`：兩側白霧線位置調整至 $58\text{px}$ 與 $446\text{px}$（與 $56\text{px}$ 路緣精準相接）。
+   - `getFourWayTexture`：`swPx` 調整為 $56\text{px}$，車道內寬 `roadInnerW` 擴展為 $400\text{px}$，四向純白枕木紋斑馬線寬度縮至 $56\text{px}$，條紋條長為 $44\text{px}$（居中），條數調整為 9 條，完美接軌四角平台。
+   - `getThreeWayTexture`：`swPx` 調整為 $56\text{px}$，東側支線橫向斑馬線寬度調整為 $56\text{px}$，西側直通路面白實線霧線精準對齊 $58\text{px}$。
+   - `getCornerTexture`：弧形瀝青路面內外半徑調整為 $56\text{px} \sim 456\text{px}$，外側白霧線半徑調整為 $450\text{px}$，內側白霧線半徑調整為 $62\text{px}$，與直線道白霧線無縫閉合。
+3. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：登錄本輪開發紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 與 Vite 打包 0 錯誤、0 警告，2.07 秒完成。
+- **空間幾何驗證**：
+  - 行車道中心 $0.28\text{m}$（行車空間 $[0.18\text{m}, 0.38\text{m}]$）。
+  - 行車避撞空間：$[0.38\text{m}, 0.52\text{m}]$（安全淨距 $14\text{cm}$）。
+  - 停車空間：$[0.52\text{m}, 0.72\text{m}]$（車寬 $0.20\text{m}$）。
+  - 路緣退縮空間：$[0.72\text{m}, 0.78\text{m}]$（安全淨距 $6\text{cm}$，徹底消除侵入人行道）。
+  - 人行道空間：$[0.78\text{m}, 1.00\text{m}]$（寬度 $0.22\text{m}$）。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交。
+
+---
+
+## [2026-11-11] 第 32 輪作業：男女市民 3D 外觀設計、車輛比例尺寸推算與全套互動檢視系統
+
+### 本輪更新摘要
+- **目標**：落實開發者最新指示：
+  1. 「設計市民外觀 先簡單區分成 男跟女」。
+  2. 「參考照片之風格 先生成基礎款的」：嚴格參照使用者提供之 3D 黏土微縮公仔樣照風格，包含圓潤人體造型、多種髮型（俐落短髮/旁分短髮、高丸子頭/齊肩鮑伯頭）、多樣化服飾剪裁（休閒圓領衛衣、活力Polo衫、運動短褲、休閒長褲、純白A字裙洋裝、粉紫背心九分褲）、經典純白厚底球鞋與精緻配件（時尚墨鏡、手提包、腰帶細節）。
+  3. 「注意大小比例(你可以跟車子的大小比較，找到市民的大小比例)」：深入比對微觀世界尺度，現代自用轎車高度為 $0.142\text{m}$、長度 $0.369\text{m}$、寬度 $0.198\text{m}$；以現實世界成人與一般轎車身高比率（約 $1.20 \sim 1.25$ 倍，成人站在車旁頭頂略高於轎車車頂）為精準基準，推導定案市民身高：
+     - 男性市民身高：$\mathbf{0.178\text{m}}$（頭身比約 6.5 頭身，肩寬 $0.068\text{m}$）。
+     - 女性市民身高：$\mathbf{0.168\text{m}}$（頭身比約 6.5 頭身，肩寬 $0.058\text{m}$）。
+     - 人行道相容性：肩寬佔 $0.22\text{m}$ 人行道僅約 $26\% \sim 30\%$，留下 $15\text{cm}$ 寬敞會車淨寬。
+     - 房屋大門相容性：房屋大門高 $0.30\text{m}$、寬 $0.14\text{m}$，市民通過大門時頭頂保留 $12\text{cm}$ 舒適頭部空間。
+- **原則**：維持不建立 GIT 版本原則；構建通過後登錄技術文檔。
+
+### 本輪異動檔案清單
+1. `src/rendering/CitizenModelFactory.ts`（全新建立）：
+   - 實作程式化低多邊形 3D 市民模型工廠。
+   - 建立調色盤：自然暖色膚色庫（5 種）、髮色庫（5 種）、男女服裝與鞋款色庫。
+   - 實作 `createMaleCitizen(options)`：健美微縮體魄、短髮蓋/旁分短髮、休閒圓領/Polo衫、短褲/長褲、白球鞋帶膠底邊框、選配時尚墨鏡。
+   - 實作 `createFemaleCitizen(options)`：柔美沙漏腰身、高丸子頭/齊肩鮑伯頭、A字洋裝/運動短裙/粉彩九分褲、小白鞋、細腰帶、選配右手拎皮質手提小包。
+   - 實作 `createLineupShowcase()`：一鍵生成「現代轎車 + 男性休閒款 + 女性優雅洋裝款 + 潮流墨鏡男 + 俏麗包包女」1:1 比例排陣展台。
+2. `src/ui/DevMenu.ts`：
+   - 升級頂部導航列為 5 個子分頁，新增「👥 市民」專屬分頁。
+   - 在 3D 模型檢視器（`dev-section-models`）下拉選單中加入市民模型與人車比例對照展台，支援 360° 自動慢速旋轉與完整規格數據顯示。
+   - 在市民專屬分頁（`dev-section-citizens`）實作：
+     - 🎲 隨機性別 / 👨 男性 / 👩 女性 切換開關。
+     - 🎯 開啟地面/人行道點選放置市民模式（帶半透明 3D 懸停 Ghost 藍光小人指標）。
+     - 🎪 一鍵在地圖原點生成人車比例排陣展台並平滑聚焦鏡頭。
+     - 🚶 一鍵在現存直線道路人行道上隨機散布 8 位男女市民。
+     - 🗑️ 一鍵清除所有測試市民。
+3. `MarkDown/Agent_dev_log.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Dissusion_withDEV.md`：登錄本輪開發紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 與 Vite 打包 0 錯誤、0 警告，1.39 秒完成。
+- **尺度審計 (Scale Audit)**：
+  - 轎車：高 $0.142\text{m}$，寬 $0.198\text{m}$，長 $0.369\text{m}$。
+  - 男性市民：高 $0.178\text{m} \sim 0.180\text{m}$，寬 $0.068\text{m}$（男/車身高比 $= 1.25\text{x}$）。
+  - 女性市民：高 $0.168\text{m} \sim 0.174\text{m}$，寬 $0.058\text{m}$（女/車身高比 $= 1.19\text{x}$）。
+  - 人行道寬 $0.22\text{m}$，市民肩寬佔比約 $26\% \sim 30\%$，視覺極度舒適自然。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交。
+
+
+
+
+
+
+
 
 
 

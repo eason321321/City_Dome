@@ -631,6 +631,300 @@ $$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
   - 東西向末端自動生成對應之 180° U-Turn 車道。
   - 確保車輛於全城任意斷頭路皆具備掉頭回折能力。
 
+---
+
+### 二十、完善住房需求與入住配對管線（Housing Demand & Matching Pipeline）
+
+#### 20.1 需求結構與產生管線（HousingDemand）
+- **需求實體設計**：
+  ```typescript
+  export interface HousingDemand {
+    id: string;                         // 唯一需求序號 dem_N
+    peopleCount: number;                 // 入住人數 1 - 5 人
+    moveInType: 'joinExisting' | 'buildNew'; // 併入別人 (合居) vs 建立新房屋
+    density: 'Low';                     // 目前為低密度 (Low)
+    preferredModels: string[];          // 2 個隨機挑選之偏好房型 ID
+    status: 'pending' | 'matched' | 'lost'; // 配對狀態
+    createdAt: number;
+    matchedBuildingId?: string;
+    matchedBuildingName?: string;
+    matchedType?: 'joinExisting' | 'buildNew';
+    failReason?: string;
+  }
+  ```
+- **佇列管理**：`demandQueue` 採置頂插入（`unshift`），使開發者介面能隨時以「最新在最上方」查看歷史與當前每一筆需求的流轉歷程。
+
+#### 20.2 「併入別人 (合居)」配對機制
+1. **候選房屋條件過濾**：
+   - 房屋狀態必須為已完工（`status === 'completed'`，建造中房屋不可作為候選）。
+   - 住宅密度相符（`category === 'Residential_Low'`）。
+   - 房型必須包含在該需求的 2 個偏好房型中（`preferredModels.includes(modelId)`）。
+   - 剩餘容量足夠：$capacity - registeredResidents \ge peopleCount$。
+2. **隨機洗牌與 50% 意願投擲**：
+   - 候選陣列執行 Fisher-Yates 隨機洗牌。
+   - 依序對候選房屋進行 `Math.random() < 0.5` 檢驗。
+   - 首個通過 50% 投擲之房屋即配對成功；若全數候選皆未通過則判定媒合失敗，需求直接流失（`status = 'lost'`）。
+3. **遷入流程**：
+   - `b.registeredResidents += peopleCount`，標記 `isCoLiving = true`。
+   - 立即調度市民車輛自公路邊界出發，抵達大門前消失時 `b.currentOccupants += peopleCount`，全城總人口正式更新。
+
+#### 20.3 「建立新房屋」配對與選地機制
+1. **模型容量前置過濾**：
+   - 檢驗 2 個偏好房型之最大容量是否 $\ge peopleCount$。若偏好房型之容量皆無法容納（例如 5 人需求但低密度房型上限為 4 人），直接配對失敗流失。
+2. **偏好房型順序檢查**：
+   - 將合格之偏好房型隨機洗牌，先檢查第 1 個偏好房型是否存在合法建地；
+   - 若第 1 個偏好房型無地塊可建，則轉向檢查第 2 個偏好房型；
+   - 若兩者皆無合適建地，則配對失敗流失。
+3. **候選建地嚴格檢驗（`findSiteForModel`）**：
+   - 分區符合：`zoneType === 'Residential'`。
+   - 空間放得下且正面緊貼馬路（`canFitModelAt`）。
+   - 未被佔用或預留：所有佔用格子皆非 `occupiedCells`。
+   - 已連通外部公路（`hasPathFromHighway(roadKey)`）。
+   - **消除重複檢查**：因建地搜尋時已嚴格確保道路連通外部公路，後續步驟無須再行多餘的連通二次驗證。
+4. **遷入流程**：
+   - 起建房屋並鎖定佔用地塊（`occupiedCells`），進入 6 秒施工動畫（鷹架、黃色旋轉警示燈、本體地底升起）。
+   - 建造完工時（100%），拆除鷹架並觸發 `dispatchCitizenVehicle`。
+   - 市民車輛自公路開抵家門前消失時，`building.currentOccupants += registeredResidents`，人口正式增加。
+
+---
+
+### 二十一、施工吊臂作業與遊戲時間解耦架構（Tower Crane & Game Simulation Time）
+
+#### 21.1 遊戲時間解耦與加速支援（Simulation Delta）
+- **背景原則**：建築施工時間、吊臂作業動畫、交通號誌、車輛行駛與燈光閃爍等遊戲內實體行為，嚴禁直接綁定現實時間戳（`Date.now()`）。
+- **架構改進**：
+  - `TimeManager.ts`：引進 `timeScale`（速度倍率，預設 1.0x），並提供 `getSimulationDelta(realDelta)`：
+    $$\text{simDelta} = \begin{cases} 0 & \text{若處於暫停狀態或 } realDelta \le 0 \\ realDelta \times \text{timeScale} & \text{正常推進或加速} \end{cases}$$
+  - `main.ts`：以 `simDelta` 統一分發至各子系統管理器，實現遊戲暫停時建造與動畫即刻定格，以及未來點擊 2x、3x 加速時施工進度與吊臂作業同步等比加速。
+- **建造時間調整**：
+  - `constructionDuration` 自原先的 $6.0\text{s}$ 調升為 3 倍，即 $18.0\text{s}$（遊戲秒數）。
+
+#### 21.2 施工塔式起重吊臂（Tower Crane）幾何結構推導
+- **坐標系佈局**：
+  - 基底位置選取地塊後方內緣：$x = \frac{W}{2} - 0.28, z = -\frac{D}{2} + 0.28$，完全收納於建築地基邊界內，不干擾前門步道與道路邊界。
+  - 塔身高度：$H_{\text{mast}} = \max(2.7, 1.9 + \max(W, D) \times 0.32)$，確保作業臂高聳於建築屋頂與施工鷹架之上。
+- **結構組成**：
+  1. **立柱塔身（Mast）**：四角黃色角鋼圓柱（$r=0.012\text{m}$），間隔 $0.16\text{m} \times 0.16\text{m}$，每隔 $0.35\text{m}$ 設有橫向拉桿與對角斜撐腹桿，底座為 $0.32\text{m} \times 0.04\text{m} \times 0.32\text{m}$ 黑色錨定鋼板。
+  2. **迴轉上部構造（Slewing Unit）**：
+     - 圓柱迴轉軸承盤（Turntable）。
+     - 駕駛室（Cabin）：黃色鋼板外殼搭接全景採光天窗與側窗（透明青藍玻璃材質）。
+     - 塔頂尖架（A-Frame Apex）：高 $0.55\text{m}$ 的四角尖錐架，頂點配置紅色航空防撞警示燈。
+  3. **平衡臂與配重（Counter-Jib & Counterweights）**：
+     - 長度 $0.85\text{m}$ 之反向懸臂樑，後端壓載 3 塊堆疊水泥配重塊（$0.24\text{m} \times 0.22\text{m} \times 0.16\text{m}$），由塔頂引出鋼纜斜拉懸吊。
+  4. **主起重臂（Main Working Jib）**：
+     - 長度 $L_{\text{jib}} = \max(2.2, \text{hypot}(W, D) \times 0.86)$，為上單下雙的三弦桿三角桁架結構，覆蓋全屋上方。由塔頂尖架引出兩組斜拉鋼纜錨定於臂長 $45\%$ 與 $78\%$ 位置。
+  5. **變幅載重小車（Trolley）**：在下弦軌道間滑動之四輪小車。
+  6. **起升鋼纜與吊掛鋼樑（Cable, Hook & Cargo）**：
+     - 垂直起升鋼纜懸掛黃色滑輪組與金屬圓弧吊鉤。
+     - 吊索下懸掛兩根防鏽紅漆塗裝之大型建築工字鋼樑（$L = 0.85\text{m}$），帶有黑色捆紮鋼帶。
+
+#### 21.3 作業動力學動畫（Working Dynamics）
+- 在 `BuildingManager.update(deltaTime, isPaused)` 中，以累積的遊戲模擬時間 $t$ 驅動：
+  1. **迴轉掃動（Slewing）**：以指向房屋中心之角度 $\theta_{\text{base}}$ 為基準，疊加多頻率正弦擺動：
+     $$\theta = \theta_{\text{base}} + 0.72 \sin(0.45 t) + 0.18 \sin(0.9 t)$$
+  2. **變幅滑移（Trolley Traversing）**：在主臂 $35\% \sim 82\%$ 範圍內平滑前後位移：
+     $$x_{\text{trolley}} = L_{\text{min}} + (L_{\text{max}} - L_{\text{min}}) \times \frac{\sin(0.6 t + 1.2) + 1}{2}$$
+  3. **起升升降（Hoisting）**：鋼纜垂直伸縮與吊料升降：
+     $$h_{\text{drop}} = D_{\text{min}} + (D_{\text{max}} - D_{\text{min}}) \times \frac{\sin(0.75 t + 2.5) + 1}{2}$$
+  4. **鋼樑慣性擺動（Inertia Sway）**：微幅隨動傾角 $\text{rot}_z = 0.07 \sin(1.5 t)$、$\text{rot}_x = 0.05 \cos(1.2 t)$。
+  5. **警示燈頻閃（Beacon Blinking）**：塔頂紅燈與鷹架黃燈皆根據 $t$ 周期運算，不受現實幀率波動影響。
+
+---
+
+### 二十二、車輛模型縮放、路邊停車幾何與行車動線避撞隔離（Vehicle Scaling, Curbside Parking & Buffer Clearance）
+
+#### 22.1 車輛尺寸減半推導（50% Scale）
+- **原模型基準**：
+  - 縮放比例：原先 `scale.set(0.9, 0.9, 0.9)`。
+  - 原車體物理包絡：長度約 $0.738\text{m}$，寬度約 $0.396\text{m}$，高度約 $0.288\text{m}$。
+- **本輪減半調整**：
+  - 縮放比例改為 `scale.set(0.45, 0.45, 0.45)`。
+  - 減半後車體尺寸：
+    - 車身長度 $L_{\text{car}} \approx 0.369\text{m}$
+    - 車身寬度 $W_{\text{car}} \approx 0.198\text{m}$（半寬 $w_h \approx 0.099\text{m}$，取 $0.10\text{m}$ 計算）
+    - 車身高度 $H_{\text{car}} \approx 0.144\text{m}$
+- **全域生效範圍**：
+  - 動態車流車輛（`VehicleManager`）、市民遷入車輛（`dispatchCitizenVehicle`）、展示模型與路邊停放車輛（`ParkingManager`）均共用 `VehicleModelFactory`，保證全城車輛比例完全一致。
+
+#### 22.2 路邊停車幾何與行車車道動線淨空隔離
+在 $2.0\text{m} \times 2.0\text{m}$ 標準道路單元中：
+1. **道路橫截面邊界**：
+   - 道路中心線：偏距 $0.0\text{m}$。
+   - 瀝青車道邊緣：$\pm 0.75\text{m}$。
+   - 高架人行道區間：$[0.75\text{m}, 1.0\text{m}]$ 與 $[-1.0\text{m}, -0.75\text{m}]$（寬各 $0.25\text{m}$）。
+2. **路邊停車中心線設定**：
+   - 設定停車偏距為 $O_{\text{park}} = \pm 0.62\text{m}$。
+   - 車身寬度佔用區間：
+     $$[0.62 - 0.10, 0.62 + 0.10] = [0.52\text{m}, 0.72\text{m}]$$
+   - 車體外側離路緣石（$0.75\text{m}$）保留 $0.03\text{m}$（$3\text{cm}$）之貼邊視覺距離，整齊靠邊且不穿透高架人行道。
+3. **行車車道中心線（LANE_OFFSET）微調**：
+   - 原 `LANE_OFFSET = 0.325m`，現微調為 $O_{\text{lane}} = \pm 0.28\text{m}$。
+   - 車輛行駛時佔用區間：
+     $$[0.28 - 0.10, 0.28 + 0.10] = [0.18\text{m}, 0.38\text{m}]$$
+4. **絕對安全隔離緩衝帶推導（Zero Collision Proof）**：
+   - 行車道最外側包絡：$0.38\text{m}$。
+   - 停車位最內側包絡：$0.52\text{m}$。
+   - 隔離間隙（Clearance Buffer）：
+     $$\text{Buffer} = 0.52\text{m} - 0.38\text{m} = 0.14\text{m} \; (14\text{cm})$$
+   - 對向行駛車輛中心間隔為 $2 \times 0.28\text{m} = 0.56\text{m}$，對向車輛間隔淨距為 $0.56 - 0.20 = 0.36\text{m}$。
+   - **結論**：行駛車輛既不會與對向車輛碰頭，也不會碰撞到停靠路邊的車輛，形成完美的三段平行空間隔離。
+
+#### 22.3 路口與轉角禁停規則之代碼級強制約束 (`ParkingManager.canParkAtTile`)
+為避免行車轉彎路徑切割停車空間，路邊停車規則以程式碼進行嚴格白名單檢驗：
+- **禁止停車區域（嚴禁停車）**：
+  1. `FourWay`（十字路口）：存在四向直行與左轉、右轉大半徑切角動線，全面禁停。
+  2. `ThreeWay`（T 字路口）：存在主線直通與支線轉彎動線，全面禁停。
+  3. `Corner`（轉角彎道）：雙向連續轉彎弧線佔用轉角空間，全面禁停。
+  4. `gz === 97`（邊界高速公路）：過境幹線速限高且車流頻繁，全面禁停。
+- **允許停車區域**：
+  1. `Straight`（直線道路）：東南西北向平行直道兩側。
+  2. `DeadEnd`（死巷終端）：末端直線路側（避開末端 U-Turn 轉向弧）。
+- **停放間距約束**：
+  - 兩輛停放車輛之空間歐氏距離必須 $\ge 0.46\text{m}$（車長 $0.369\text{m} + 0.09\text{m}$ 前後安全車距），杜絕車輛重疊。
+
+---
+
+### 二十三、0.5m 土地分區格位系統與 1/4 面積建築縮放幾何（Quarter-Size Zoning Grid & Building Scaling）
+
+#### 23.1 格位規格與離散整數索引映射
+- **單元尺寸**：`CELL_SIZE = 0.5m`。
+  - 原先單格：$1.0\text{m} \times 1.0\text{m} = 1.0\text{m}^2$。
+  - 現在單格：$0.5\text{m} \times 0.5\text{m} = 0.25\text{m}^2$（面積為原先的四分之一）。
+- **網格坐標連續與離散轉換**：
+  - 給定世界座標 $(x, z)$，其整數索引為：
+    $$zx = \lfloor x / \text{CELL\_SIZE} \rfloor, \quad zz = \lfloor z / \text{CELL\_SIZE} \rfloor$$
+  - 給定整數索引 $(zx, zz)$，其覆蓋區間與中心座標為：
+    $$x \in [zx \times \text{CELL\_SIZE}, (zx + 1) \times \text{CELL\_SIZE}], \quad x_{\text{center}} = (zx + 0.5) \times \text{CELL\_SIZE}$$
+    $$z \in [zz \times \text{CELL\_SIZE}, (zz + 1) \times \text{CELL\_SIZE}], \quad z_{\text{center}} = (zz + 0.5) \times \text{CELL\_SIZE}$$
+- **道路兩側投影拓撲**：
+  - 道路單元為 $2.0\text{m} \times 2.0\text{m}$，中心吸附於奇數座標 $(gx, gz)$。
+  - 沿道路方向：單一路段長度 $2.0\text{m}$ 劃分為 $4$ 個格位（$2.0 / 0.5 = 4$）。
+  - 垂直向外發散：縱深由原先 4 格調升為 **8 格**（`ZONING_DEPTH = 8`），總縱深保持 $8 \times 0.5\text{m} = 4.0\text{m}$。
+
+#### 23.2 建築佔地與 3D 幾何四分之一等比縮放
+- **格位佔地比例對應**：
+  - 房型目錄中 `frontageWidth`（面寬格數 $W$）與 `lotDepth`（縱深格數 $D$）維持幾何格數不變：
+    - `Residential_2x2`：$2 \times 2$ 格 $\to$ 實體佔地 $1.0\text{m} \times 1.0\text{m} = 1.0\text{m}^2$（原 $4\text{m}^2$ 的 $1/4$）。
+    - `Residential_2x3`：$2 \times 3$ 格 $\to$ 實體佔地 $1.0\text{m} \times 1.5\text{m} = 1.5\text{m}^2$（原 $6\text{m}^2$ 的 $1/4$）。
+    - `Residential_3x2`：$3 \times 2$ 格 $\to$ 實體佔地 $1.5\text{m} \times 1.0\text{m} = 1.5\text{m}^2$（原 $6\text{m}^2$ 的 $1/4$）。
+    - `Residential_3x3`：$3 \times 3$ 格 $\to$ 實體佔地 $1.5\text{m} \times 1.5\text{m} = 2.25\text{m}^2$（原 $9\text{m}^2$ 的 $1/4$）。
+    - `Residential_4x4`：$4 \times 4$ 格 $\to$ 實體佔地 $2.0\text{m} \times 2.0\text{m} = 4.0\text{m}^2$（原 $16\text{m}^2$ 的 $1/4$）。
+- **3D 模型封裝層次 (RootWrapper)**：
+  - 在 `BuildingModelFactory.createBuildingById` 中建立 `rootWrapper`，內部子模型套用 `scale.set(0.5, 0.5, 0.5)`。
+  - `BuildingManager` 驅動 `rootWrapper.scale.set(1.0, prog, 1.0)` 時，X/Z 軸恆定保持 $0.5$（四分之一底面積），Y 軸施工動畫由 $0.05 \times 0.5 \to 1.0 \times 0.5$ 升起。
+  - 地底沉降初值由 $-0.8\text{m}$ 等比改為 $-0.4\text{m}$。
+
+#### 23.3 四向（N/S/E/W）建地中心與緊貼馬路檢驗數學公式
+令 $cs = \text{CELL\_SIZE} = 0.5$：
+1. **朝南（Facing 'S'，路在 $+Z$）**：
+    - 馬路檢驗線：$z_{\text{test}} = (originZz + 1) \times cs + 0.25$
+    - 建地中心：$cx = (originZx + W / 2) \times cs, \quad cz = (originZz - D / 2 + 1.0) \times cs$
+2. **朝北（Facing 'N'，路在 $-Z$）**：
+    - 馬路檢驗線：$z_{\text{test}} = originZz \times cs - 0.25$
+    - 建地中心：$cx = (originZx + W / 2) \times cs, \quad cz = (originZz + D / 2) \times cs$
+3. **朝東（Facing 'E'，路在 $+X$）**：
+    - 馬路檢驗線：$x_{\text{test}} = (originZx + 1) \times cs + 0.25$
+    - 建地中心：$cx = (originZx - D / 2 + 1.0) \times cs, \quad cz = (originZz + W / 2) \times cs$
+4. **朝西（Facing 'W'，路在 $-X$）**：
+    - 馬路檢驗線：$x_{\text{test}} = originZx \times cs - 0.25$
+    - 建地中心：$cx = (originZx + D / 2) \times cs, \quad cz = (originZz + W / 2) \times cs$
+- 所有朝向下，建築地基邊界與道路人行道石邊緣誤差嚴格等於 $0.0\text{m}$。
+
+---
+
+### 24. 人行道縮窄至 0.22m、路緣停車防侵入淨距與斑馬線幾何對齊
+
+#### 24.1 斷面空間階梯與零碰撞/零侵入解析
+在單向半幅路寬 $1.0\text{m}$ 內（世界坐標自中線 $0.0\text{m}$ 至外側邊界 $1.0\text{m}$），各項空間元素劃分如下：
+1. **行車道 (Driving Lane)**：
+   - 車道中心線：$X = 0.28\text{m}$。
+   - 車輛半寬：$0.10\text{m}$（全寬 $0.20\text{m}$）。
+   - 動態行車佔用寬度：$[0.18\text{m}, 0.38\text{m}]$。
+2. **動態行車避撞淨空 (Collision Buffer)**：
+   - 區間：$[0.38\text{m}, 0.52\text{m}]$，淨距為 $\mathbf{0.14\text{m} = 14\text{cm}}$。
+   - 保證行駛中車輛與路邊停放靜止車輛之間具備安全避讓距離，絕無穿模擦撞。
+3. **路邊停車位 (Curbside Parking)**：
+   - 車輛中心線：$X = 0.62\text{m}$（維持使用者指定之停車位置不變）。
+   - 靜止車輛佔用寬度：$[0.52\text{m}, 0.72\text{m}]$。
+4. **路緣石安全退縮淨空 (Curb Clearance)**：
+   - 區間：$[0.72\text{m}, 0.78\text{m}]$，淨距為 $\mathbf{0.06\text{m} = 6\text{cm}}$。
+   - 解決痛點：原先人行道自 $0.65\text{m}$ 展開，導致停放車輛外側 $0.72\text{m}$ 侵入立體人行道 $7\text{cm}$。縮窄人行道後，車身外緣距路緣石保留 $6\text{cm}$ 舒適間隙，完全消除侵占與破面重疊。
+5. **立體高架人行道 (Elevated Sidewalk)**：
+   - 寬度：$W_{\text{sw}} = \mathbf{0.22\text{m}}$（原 $0.35\text{m}$）。
+   - 區間：$[0.78\text{m}, 1.00\text{m}]$。
+   - 網格中心：$X = \pm(1.00 - 0.11) = \mathbf{\pm 0.89\text{m}}$。
+   - 高度：車道面高 $0.035\text{m}$，人行道高 $0.070\text{m}$，形成 $0.035\text{m}$ 之路緣立面石階。
+
+#### 24.2 斑馬線紋理與角隅平台幾何適配
+在 $512 \times 512$ 畫布中（$1.0\text{m} \iff 256\text{px}$）：
+- 人行道像素寬度：$swPx = 0.22 \times 256 = \mathbf{56\text{px}}$（原 $90\text{px}$）。
+- 車道淨寬：$roadInnerW = 512 - 56 \times 2 = \mathbf{400\text{px}}$（原 $332\text{px}$）。
+- **十字路口 (FourWay)**：
+  - 四角平台尺寸為 $0.22\text{m} \times 0.22\text{m}$（$56\text{px} \times 56\text{px}$）。
+  - 四向純白枕木紋斑馬線寬度為 $56\text{px}$，兩端完全銜接四角平台。
+  - 條紋條長 $44\text{px}$（上下各保留 $6\text{px}$ 瀝青邊緣），條寬 $22\text{px}$，配置 9 條枕木條，間距均勻平整。
+- **直線道路與 T 字路口 (ThreeWay)**：
+  - 白霧線位置自 $92\text{px}$ 移至 $58\text{px}$（$512 - 58 - 8 = 446\text{px}$），與 $56\text{px}$ 人行道路緣石完全吻合。
+  - T 字路口東側支線橫穿斑馬線同步調整為 $56\text{px}$，保持全城行人動線標準一貫性。
+- **彎道轉角 (Corner)**：
+  - 瀝青弧半徑由 $90 \sim 422\text{px}$ 改為 $56 \sim 456\text{px}$。
+  - 外側白霧線半徑為 $450\text{px}$，內側白霧線半徑為 $62\text{px}$，與直道白霧線在接縫處曲率相切閉合。
+
+---
+
+### 25. 市民外觀造型系統、微觀公仔美學與車輛尺度對照
+
+#### 25.1 微觀比例數學推導 (Citizen vs Vehicle Scale Derivation)
+依據專案中各實體的絕對公尺數規格進行嚴密尺度對位：
+1. **基準載具（自用轎車）**：
+   - 總高度 $H_{\text{car}} = 0.142\text{m}$（座艙頂部）。
+   - 車體寬度 $W_{\text{car}} = 0.198\text{m} \approx 0.20\text{m}$。
+   - 車體長度 $L_{\text{car}} = 0.369\text{m} \approx 0.37\text{m}$。
+2. **真實世界成人與中型轎車之比例關係**：
+   - 現實中標準自用轎車車高約 $1.42\text{m} \sim 1.48\text{m}$。
+   - 成年男性平均身高約 $1.75\text{m} \sim 1.78\text{m}$；成年女性平均身高約 $1.65\text{m} \sim 1.68\text{m}$。
+   - 身高比率：$H_{\text{human}} / H_{\text{sedan}} \approx 1.20 \sim 1.25$ 倍。
+   - 視覺特徵：成人站立於轎車旁時，頭部與肩膀略微高出轎車車頂，呈現真實且協調的微縮場景觀感。
+3. **市民模型幾何尺寸定案**：
+   - **男性市民 (Male Citizen)**：
+     - 身高：$H_{\text{male}} = \mathbf{0.178\text{m} \sim 0.180\text{m}}$（為車高的 $1.25$ 倍）。
+     - 肩寬：$W_{\text{male}} = \mathbf{0.068\text{m}}$（約 $6.8\text{cm}$）。
+     - 頭身比：約 $6.5$ 頭身，圓潤微橢圓頭部（高 $0.032\text{m}$）。
+   - **女性市民 (Female Citizen)**：
+     - 身高：$H_{\text{female}} = \mathbf{0.168\text{m}}$（若含高丸子頭則約 $0.174\text{m}$，為車高的 $1.19$ 倍）。
+     - 肩寬：$W_{\text{female}} = \mathbf{0.058\text{m}}$（約 $5.8\text{cm}$）。
+     - 柔美沙漏身形與纖細手臂。
+4. **與城市其他設施之相容性檢驗**：
+   - **人行道 ($0.22\text{m}$)**：單名市民佔用寬度約 $0.068\text{m}$（僅佔人行道總寬的 $30\%$），雙向市民並肩或交會時佔 $0.136\text{m}$，仍剩餘 $8.4\text{cm}$ 裕度，絕不溢出至路面或侵入建築。
+   - **房屋門戶 ($0.30\text{m} \times 0.14\text{m}$)**：市民進出住宅大門時，頭頂具備 $12\text{cm}$ 以上開闊淨空，比例精緻自然。
+
+#### 25.2 樣照風格程式化 Low-Poly 幾何與材質規格
+1. **材質與色彩 (Procedural Materials)**：
+   - 材質採高粗糙度（$0.65$）、低金屬感（$0.05$）之平滑啞光材質，呈現樣照中微縮公仔之精巧黏土感。
+   - 配備 5 款自然暖色調皮膚材質（白皙、小麥、古銅等）。
+   - 上衣與褲裙採高彩度現代都市休閒色盤（天藍衛衣、沁涼海青 Polo、純白洋裝、薰衣草紫套裝）。
+2. **解剖造型層次 (Procedural Hierarchy)**：
+   - **雙腳與鞋子**：純白厚底球鞋（帶微倒角與灰色膠邊飾條，高度 $0.012\text{m}$）。
+   - **雙腿與下裝**：
+     - 男性：運動短褲（上部布料，下部顯露膚色小腿）或都會休閒長褲。
+     - 女性：A-Line 傘狀洋裝裙襬（下部顯露纖細膚色雙腿）、運動短裙或粉彩九分修身褲。
+   - **軀幹與上裝**：
+     - 男性：倒梯形微縮胸背，領口滾邊。
+     - 女性：纖細沙漏身形，搭配紅色/金色腰帶細節。
+   - **手臂與雙手**：
+     - 自然下垂或微曲姿態，短袖袖口搭配膚色前臂與圓形小手掌。
+     - 女性選配右手提拿立體皮質手提包（帶彎曲提把）。
+   - **頭部與髮型**：
+     - 男性：俐落偏分短髮蓋與側邊短鬢角。
+     - 女性：頂部高丸子頭（Top Bun）或氣質微彎齊肩鮑伯頭（Bob Cut）。
+     - 選配配件：時尚黑色反光雙鏡片墨鏡（帶鼻樑連桿與鏡腳）。
+
+
+
+
+
+
+
 
 
 

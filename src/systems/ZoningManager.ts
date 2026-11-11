@@ -5,11 +5,11 @@ import { CameraManager } from '../rendering/CameraManager';
 export type ZoneType = 'None' | 'Residential';
 
 export interface ZoningCell {
-  key: string;             // "zx,zz" e.g. "12,24"
-  zx: number;              // 1m 格位整數索引
+  key: string;             // "zx,zz" e.g. "24,48"
+  zx: number;              // 0.5m 格位整數索引
   zz: number;
-  worldX: number;          // 中心世界座標 X (zx + 0.5)
-  worldZ: number;          // 中心世界座標 Z (zz + 0.5)
+  worldX: number;          // 中心世界座標 X ((zx + 0.5) * CELL_SIZE)
+  worldZ: number;          // 中心世界座標 Z ((zz + 0.5) * CELL_SIZE)
   zoneType: ZoneType;      // 當前分區型別
   mesh?: THREE.Mesh;       // 視覺填充網格
 }
@@ -17,7 +17,7 @@ export interface ZoningCell {
 /**
  * 土地劃分與路側分區管理器 (ZoningManager)
  * 負責：
- * 1. 於道路周邊動態生成垂直於道路的 1m x 1m 小格子（非地圖網格，依道路拓撲動態生成）
+ * 1. 於道路周邊動態生成垂直於道路的 0.5m x 0.5m 小格子（非地圖網格，依道路拓撲動態生成）
  * 2. 呈現 Cities: Skylines 風格之分區網格線與住宅區（綠色）色塊
  * 3. 支援滑鼠點擊與連續拖曳劃分住宅區（Residential Zone）與清除分區
  * 4. 道路建造與更新時自動同步維護臨路分區格位
@@ -29,9 +29,10 @@ export class ZoningManager {
   private cameraManager: CameraManager;
   private roadNetwork: RoadNetwork;
 
-  // 分區資料
+  // 分區資料 (格位大小改為原先 1/4，即 0.5m x 0.5m，延伸 8 格 = 縱深 4m)
+  public readonly CELL_SIZE: number = 0.5;
   private cells: Map<string, ZoningCell> = new Map();
-  private readonly ZONING_DEPTH: number = 4; // 道路兩側縱深 4 格 (4m)
+  private readonly ZONING_DEPTH: number = 8; // 道路兩側縱深 8 格 (4m)
 
   // 3D 視覺物件群組
   private zoningContainer: THREE.Group;
@@ -49,8 +50,8 @@ export class ZoningManager {
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
   private groundPlane: THREE.Plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
-  // 共享材質與幾何體
-  private sharedCellGeo: THREE.PlaneGeometry = new THREE.PlaneGeometry(0.92, 0.92);
+  // 共享材質與幾何體 (配合 0.5m 小格子)
+  private sharedCellGeo: THREE.PlaneGeometry = new THREE.PlaneGeometry(0.46, 0.46);
   private residentialMat: THREE.MeshStandardMaterial;
   private hoverMatResidential: THREE.MeshBasicMaterial;
   private hoverMatDezone: THREE.MeshBasicMaterial;
@@ -109,8 +110,8 @@ export class ZoningManager {
       opacity: 0.9,
     });
 
-    // 懸浮筆刷框幾何體 (稍大於小格子)
-    const hoverGeo = new THREE.PlaneGeometry(0.98, 0.98);
+    // 懸浮筆刷框幾何體 (稍大於 0.5m 小格子)
+    const hoverGeo = new THREE.PlaneGeometry(0.49, 0.49);
     this.hoverBrushMesh = new THREE.Mesh(hoverGeo, this.hoverMatResidential);
     this.hoverBrushMesh.rotation.x = -Math.PI / 2;
     this.hoverBrushMesh.position.y = 0.032;
@@ -208,7 +209,7 @@ export class ZoningManager {
 
     const candidateCells = new Map<string, { zx: number; zz: number }>();
 
-    // 3. 遍歷每個道路單元，向開口外側垂直投影 4 層 1m 格位
+    // 3. 遍歷每個道路單元，向開口外側垂直投影 8 層 0.5m 格位 (向外延伸 4m，每格 0.5m)
     for (const tile of roadTiles) {
       const { gx, gz } = tile;
 
@@ -220,49 +221,53 @@ export class ZoningManager {
 
       // 西側 (-X 側垂直發散)
       if (!hasW) {
+        const zxEdge = Math.round((gx - 1.0) / this.CELL_SIZE);
+        const zzStart = Math.round((gz - 1.0) / this.CELL_SIZE);
         for (let d = 0; d < this.ZONING_DEPTH; d++) {
-          const cx = gx - 1.5 - d;
-          const zx = Math.floor(cx);
-          const zz1 = Math.floor(gz - 0.5);
-          const zz2 = Math.floor(gz + 0.5);
-          candidateCells.set(`${zx},${zz1}`, { zx, zz: zz1 });
-          candidateCells.set(`${zx},${zz2}`, { zx, zz: zz2 });
+          const zx = zxEdge - 1 - d;
+          for (let k = 0; k < 4; k++) {
+            const zz = zzStart + k;
+            candidateCells.set(`${zx},${zz}`, { zx, zz });
+          }
         }
       }
 
       // 東側 (+X 側垂直發散)
       if (!hasE) {
+        const zxEdge = Math.round((gx + 1.0) / this.CELL_SIZE);
+        const zzStart = Math.round((gz - 1.0) / this.CELL_SIZE);
         for (let d = 0; d < this.ZONING_DEPTH; d++) {
-          const cx = gx + 1.5 + d;
-          const zx = Math.floor(cx);
-          const zz1 = Math.floor(gz - 0.5);
-          const zz2 = Math.floor(gz + 0.5);
-          candidateCells.set(`${zx},${zz1}`, { zx, zz: zz1 });
-          candidateCells.set(`${zx},${zz2}`, { zx, zz: zz2 });
+          const zx = zxEdge + d;
+          for (let k = 0; k < 4; k++) {
+            const zz = zzStart + k;
+            candidateCells.set(`${zx},${zz}`, { zx, zz });
+          }
         }
       }
 
       // 北側 (-Z 側垂直發散)
       if (!hasN) {
+        const zzEdge = Math.round((gz - 1.0) / this.CELL_SIZE);
+        const zxStart = Math.round((gx - 1.0) / this.CELL_SIZE);
         for (let d = 0; d < this.ZONING_DEPTH; d++) {
-          const cz = gz - 1.5 - d;
-          const zz = Math.floor(cz);
-          const zx1 = Math.floor(gx - 0.5);
-          const zx2 = Math.floor(gx + 0.5);
-          candidateCells.set(`${zx1},${zz}`, { zx: zx1, zz });
-          candidateCells.set(`${zx2},${zz}`, { zx: zx2, zz });
+          const zz = zzEdge - 1 - d;
+          for (let k = 0; k < 4; k++) {
+            const zx = zxStart + k;
+            candidateCells.set(`${zx},${zz}`, { zx, zz });
+          }
         }
       }
 
       // 南側 (+Z 側垂直發散)
       if (!hasS) {
+        const zzEdge = Math.round((gz + 1.0) / this.CELL_SIZE);
+        const zxStart = Math.round((gx - 1.0) / this.CELL_SIZE);
         for (let d = 0; d < this.ZONING_DEPTH; d++) {
-          const cz = gz + 1.5 + d;
-          const zz = Math.floor(cz);
-          const zx1 = Math.floor(gx - 0.5);
-          const zx2 = Math.floor(gx + 0.5);
-          candidateCells.set(`${zx1},${zz}`, { zx: zx1, zz });
-          candidateCells.set(`${zx2},${zz}`, { zx: zx2, zz });
+          const zz = zzEdge + d;
+          for (let k = 0; k < 4; k++) {
+            const zx = zxStart + k;
+            candidateCells.set(`${zx},${zz}`, { zx, zz });
+          }
         }
       }
     }
@@ -271,8 +276,8 @@ export class ZoningManager {
     const validCells: ZoningCell[] = [];
 
     for (const [key, pos] of candidateCells) {
-      const worldX = pos.zx + 0.5;
-      const worldZ = pos.zz + 0.5;
+      const worldX = (pos.zx + 0.5) * this.CELL_SIZE;
+      const worldZ = (pos.zz + 0.5) * this.CELL_SIZE;
 
       // 確保小格子不超出建設區邊界 (-100 ~ 100)
       if (worldX < -100 || worldX > 100 || worldZ < -100 || worldZ > 100) {
@@ -305,7 +310,7 @@ export class ZoningManager {
   }
 
   /**
-   * 檢查 1m x 1m 小格位中心點是否落在任何 2m 道路內部
+   * 檢查 0.5m x 0.5m 小格位中心點是否落在任何 2m 道路內部
    */
   private isOverlappingRoad(cx: number, cz: number, roadTiles: RoadTile[]): boolean {
     for (let i = 0; i < roadTiles.length; i++) {
@@ -359,8 +364,8 @@ export class ZoningManager {
       const [x1, z1] = p1.split(',').map(Number);
       const [x2, z2] = p2.split(',').map(Number);
 
-      positions.push(x1, lineY, z1);
-      positions.push(x2, lineY, z2);
+      positions.push(x1 * this.CELL_SIZE, lineY, z1 * this.CELL_SIZE);
+      positions.push(x2 * this.CELL_SIZE, lineY, z2 * this.CELL_SIZE);
     }
 
     const geo = new THREE.BufferGeometry();
@@ -404,8 +409,8 @@ export class ZoningManager {
    * 對座標進行塗抹操作（指派住宅區或清除）
    */
   private applyZoningAtWorldPos(worldX: number, worldZ: number, overrideType?: ZoneType): void {
-    const zx = Math.floor(worldX);
-    const zz = Math.floor(worldZ);
+    const zx = Math.floor(worldX / this.CELL_SIZE);
+    const zz = Math.floor(worldZ / this.CELL_SIZE);
     const key = `${zx},${zz}`;
 
     const cell = this.cells.get(key);
@@ -451,8 +456,8 @@ export class ZoningManager {
         return;
       }
 
-      const zx = Math.floor(hit.x);
-      const zz = Math.floor(hit.z);
+      const zx = Math.floor(hit.x / this.CELL_SIZE);
+      const zz = Math.floor(hit.z / this.CELL_SIZE);
       const key = `${zx},${zz}`;
 
       const cell = this.cells.get(key);

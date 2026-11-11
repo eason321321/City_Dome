@@ -125,10 +125,10 @@ export class RoadTextureFactory {
 
     const { canvas, ctx } = this.createAsphaltCanvas();
 
-    // 兩側人行道交界白霧線（寬度 8px）
+    // 兩側人行道交界白霧線（寬度 8px，與 56px (0.22m) 縮窄後人行道路緣石精確貼合）
     ctx.fillStyle = '#f1f5f9';
-    ctx.fillRect(92, 0, 8, 512);
-    ctx.fillRect(512 - 100, 0, 8, 512);
+    ctx.fillRect(58, 0, 8, 512);
+    ctx.fillRect(512 - 58 - 8, 0, 8, 512);
 
     // 中央黃色虛線
     ctx.strokeStyle = '#f59e0b';
@@ -151,13 +151,18 @@ export class RoadTextureFactory {
   /**
    * 2. 十字路口（Four-Way Intersection）紋理
    * 依指示：純白枕木紋直接繪製於深色瀝青路面上（背景色與路面完全一致，不添加綠底）
+   * 配合縮窄至 0.22m (56px) 人行道與四角平台，斑馬線寬度調整為 56px，兩端無縫咬合
    */
   public static getFourWayTexture(): THREE.CanvasTexture {
     if (this.fourWayTexture) return this.fourWayTexture;
 
     const { canvas, ctx } = this.createAsphaltCanvas();
 
-    // 繪製幾條純白枕木紋（Sleeper Stripes，無任何綠色襯底，底色即為標準瀝青路面）
+    // 配合縮窄至 0.22m 人行道，斑馬線寬度與路緣為 56px
+    const swPx = 56;
+    const roadInnerW = 512 - swPx * 2; // 車道內寬 (400px)
+
+    // 繪製純白枕木紋（Sleeper Stripes，無任何綠色襯底，底色即為標準瀝青路面）
     const drawSleeperZebra = (
       boxX: number,
       boxY: number,
@@ -166,37 +171,34 @@ export class RoadTextureFactory {
       isVerticalFlow: boolean
     ) => {
       ctx.fillStyle = '#ffffff';
-      const stripeCount = 7;
+      const stripeCount = 9;
       if (isVerticalFlow) {
-        const barW = 24;
+        const barW = 22;
         const gap = (boxW - barW * stripeCount) / (stripeCount + 1);
         for (let i = 0; i < stripeCount; i++) {
           const x = boxX + gap + i * (barW + gap);
-          ctx.fillRect(x, boxY + 6, barW, boxH - 12);
+          ctx.fillRect(x, boxY + 4, barW, boxH - 8);
         }
       } else {
-        const barH = 24;
+        const barH = 22;
         const gap = (boxH - barH * stripeCount) / (stripeCount + 1);
         for (let i = 0; i < stripeCount; i++) {
           const y = boxY + gap + i * (barH + gap);
-          ctx.fillRect(boxX + 6, y, boxW - 12, barH);
+          ctx.fillRect(boxX + 4, y, boxW - 8, barH);
         }
       }
     };
 
-    const swPx = 90; // 人行道與斑馬線寬度 0.35m -> 90px
-    const roadInnerW = 512 - swPx * 2; // 車道內寬 (332px)
-
-    // 北側斑馬線 (y: 0~90px)
+    // 北側斑馬線 (y: 0~56px)
     drawSleeperZebra(swPx, 0, roadInnerW, swPx, true);
 
-    // 南側斑馬線 (y: 422~512px)
+    // 南側斑馬線 (y: 456~512px)
     drawSleeperZebra(swPx, 512 - swPx, roadInnerW, swPx, true);
 
-    // 西側斑馬線 (x: 0~90px)
+    // 西側斑馬線 (x: 0~56px)
     drawSleeperZebra(0, swPx, swPx, roadInnerW, false);
 
-    // 東側斑馬線 (x: 422~512px)
+    // 東側斑馬線 (x: 456~512px)
     drawSleeperZebra(512 - swPx, swPx, swPx, roadInnerW, false);
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -208,13 +210,14 @@ export class RoadTextureFactory {
   /**
    * 3. T 字路口（Three-Way Junction）紋理
    * 依指示：直線貫通部分為車流高速直通區，不設斑馬線；僅在支線進入處設置行人橫穿斑馬線
+   * 配合 56px (0.22m) 縮窄後人行道與白霧線調整
    */
   public static getThreeWayTexture(): THREE.CanvasTexture {
     if (this.threeWayTexture) return this.threeWayTexture;
 
     const { canvas, ctx } = this.createAsphaltCanvas();
 
-    const swPx = 90;
+    const swPx = 56;
     const roadInnerW = 512 - swPx * 2;
 
     // 1. 直線貫通車道（南北向直通）：中央分道黃色虛線直通到底，無斑馬線橫跨
@@ -226,7 +229,7 @@ export class RoadTextureFactory {
     ctx.lineTo(256, 512);
     ctx.stroke();
 
-    // 西側連續貫通白實線霧線
+    // 西側連續貫通白實線霧線 (貼齊 56px 人行道路緣)
     ctx.fillStyle = '#f1f5f9';
     ctx.fillRect(swPx + 2, 0, 8, 512);
 
@@ -235,13 +238,13 @@ export class RoadTextureFactory {
     ctx.fillRect(512 - swPx - 10, 512 - swPx, 8, swPx);
 
     // 2. 僅在支線路口（東側）繪製行人橫穿之枕木紋斑馬線（背景色為路面瀝青色）
-    const stripeCount = 7;
-    const barH = 24;
+    const stripeCount = 9;
+    const barH = 22;
     const gap = (roadInnerW - barH * stripeCount) / (stripeCount + 1);
     ctx.fillStyle = '#ffffff';
     for (let i = 0; i < stripeCount; i++) {
       const y = swPx + gap + i * (barH + gap);
-      ctx.fillRect(512 - swPx + 6, y, swPx - 12, barH);
+      ctx.fillRect(512 - swPx + 4, y, swPx - 8, barH);
     }
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -252,15 +255,12 @@ export class RoadTextureFactory {
 
   /**
    * 4. 彎道轉角（Corner Turn）紋理
-   */
-  /**
-   * 4. 彎道轉角（Corner Turn）紋理
    * 同心圓弧標線（以內角 (512, 512) 為同心圓心）：
-   * - 外側白霧線：半徑 416px (1.625m)
+   * - 外側白霧線：半徑 450px (與直道 58px 白線精準對齊: 512 - 58 - 4 = 450)
    * - 中央黃色分道虛線：半徑 256px (1.0m)
-   * - 內側白霧線：半徑 96px (0.375m)
-   * - 車道瀝青區域：半徑 90px ~ 422px
-   * - 外側角 (半徑 > 422px) 與內側角 (半徑 < 90px)：淺灰人行道混凝土底色 (#94a3b8)
+   * - 內側白霧線：半徑 62px (與直道 58px 白線精準對齊: 58 + 4 = 62)
+   * - 車道瀝青區域：半徑 56px ~ 456px
+   * - 外側角 (半徑 > 456px) 與內側角 (半徑 < 56px)：淺灰人行道混凝土底色 (#94a3b8)
    */
   public static getCornerTexture(): THREE.CanvasTexture {
     if (this.cornerTexture) return this.cornerTexture;
@@ -285,26 +285,26 @@ export class RoadTextureFactory {
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // 2. 繪製弧形瀝青車道路面 (半徑 90px 至 422px，圓心在 (512, 512))
+    // 2. 繪製弧形瀝青車道路面 (半徑 56px 至 456px，圓心在 (512, 512))
     ctx.fillStyle = '#22252a';
     ctx.beginPath();
-    ctx.arc(512, 512, 422, Math.PI, 1.5 * Math.PI, false);
-    ctx.lineTo(512, 512 - 90);
-    ctx.arc(512, 512, 90, 1.5 * Math.PI, Math.PI, true);
+    ctx.arc(512, 512, 456, Math.PI, 1.5 * Math.PI, false);
+    ctx.lineTo(512, 512 - 56);
+    ctx.arc(512, 512, 56, 1.5 * Math.PI, Math.PI, true);
     ctx.closePath();
     ctx.fill();
 
     // 3. 同心圓弧標線繪製：
-    // 外側白霧線 (半徑 416，與直道 96px 白線 100% 精準對齊)
+    // 外側白霧線 (半徑 450，與直道 58px 白線 100% 精準對齊)
     ctx.strokeStyle = '#f1f5f9';
     ctx.lineWidth = 8;
     ctx.beginPath();
-    ctx.arc(512, 512, 416, Math.PI, 1.5 * Math.PI);
+    ctx.arc(512, 512, 450, Math.PI, 1.5 * Math.PI);
     ctx.stroke();
 
-    // 內側白霧線 (半徑 96，與直道 416px 白線 100% 精準對齊)
+    // 內側白霧線 (半徑 62，與直道 58px 白線 100% 精準對齊)
     ctx.beginPath();
-    ctx.arc(512, 512, 96, Math.PI, 1.5 * Math.PI);
+    ctx.arc(512, 512, 62, Math.PI, 1.5 * Math.PI);
     ctx.stroke();
 
     // 中央黃色分道虛線弧線 (半徑 256，與直道 256px 中央黃線完美閉合)

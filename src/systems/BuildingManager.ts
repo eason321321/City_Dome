@@ -25,11 +25,41 @@ export interface PlacedBuilding {
   scaffoldingGroup: THREE.Group;
   status: 'constructing' | 'completed';
   constructionProgress: number;     // 0.0 ~ 1.0
-  constructionDuration: number;     // 建造總秒數
+  constructionDuration: number;     // 建造總秒數 (以遊戲模擬時間計)
   registeredResidents: number;      // 登記居住人數
   currentOccupants: number;         // 當前房內人數
   isCoLiving: boolean;              // 是否合居 (true: 與人合居, false: 自己住)
   moveInStatus: 'none' | 'enRoute' | 'arrived' | 'waitingForRoad';
+  // 施工吊臂作業相關動畫元件參照
+  craneRefs?: {
+    slewArm: THREE.Group;
+    trolley: THREE.Group;
+    cable: THREE.Mesh;
+    hookAndCargo: THREE.Group;
+    beacon: THREE.Mesh;
+    baseAngle: number;
+    jibLength: number;
+    mastHeight: number;
+    animTimer: number;
+  };
+}
+
+export type HousingDensity = 'Low' | 'Medium' | 'High';
+export type MoveInType = 'joinExisting' | 'buildNew';
+export type DemandStatus = 'pending' | 'matched' | 'lost';
+
+export interface HousingDemand {
+  id: string;
+  peopleCount: number;                 // 入住人數 1 - 5
+  moveInType: MoveInType;             // 併入別人 (joinExisting) vs 建立新房屋 (buildNew)
+  density: HousingDensity;            // 需求住宅密度 (目前皆為 'Low')
+  preferredModels: string[];          // 2 個可接受之偏好房型 ID
+  status: DemandStatus;               // 'pending' | 'matched' | 'lost'
+  createdAt: number;
+  matchedBuildingId?: string;         // 成功配對之房屋 ID
+  matchedBuildingName?: string;       // 成功配對之房屋名稱
+  matchedType?: MoveInType;           // 實際配對類型
+  failReason?: string;                // 配對失敗流失原因
 }
 
 export interface MatchingResult {
@@ -38,6 +68,7 @@ export interface MatchingResult {
   timestamp: number;
   buildingName?: string;
   reason?: string;
+  demand?: HousingDemand;
 }
 
 /**
@@ -58,13 +89,18 @@ export class BuildingManager {
   private roadNetwork: RoadNetwork;
   private vehicleManager: VehicleManager;
 
+  // 格位尺寸與建物縮放 (配合 0.5m x 0.5m 小格子，建築物底面積為原先 1/4)
+  private readonly CELL_SIZE: number = 0.5;
+
   // 建築群組與資料儲存
   private buildingsContainer: THREE.Group;
   private buildings: Map<string, PlacedBuilding> = new Map();
   private occupiedCells: Set<string> = new Set();
   private nextBuildingId: number = 1;
 
-  // 住房需求統計與配對記錄
+  // 住房需求統計與佇列清單 (需求清單最新在最上方)
+  private demandQueue: HousingDemand[] = [];
+  private nextDemandId: number = 1;
   private totalDemandGenerated: number = 0;
   private totalMatchedSuccess: number = 0;
   private totalDemandLost: number = 0;
@@ -100,147 +136,296 @@ export class BuildingManager {
   }
 
   // ==========================================
-  // 住房需求產生與配對機制 (核心需求 1, 2, 3, 4)
+  // 住房需求產生與三階段配對入住機制
+  // 流程：1. 產生需求 -> 2. 配對需求 -> 3. 配對成功開車入住 / 失敗流失
   // ==========================================
 
   /**
-   * 住房需求產生請求 (支援 1人、2人、3人住戶)
-   * 若配對不滿足 (無相連道路、缺乏合適容量房型)，則配對失敗，流失該筆需求。
+   * 產生隨機或指定人數之住房需求，並加入需求清單、立即執行配對
+   * @param forcedPeopleCount 可選指定人數 (1-5 人)，未指定則 1-5 隨機
    */
-  public requestHousingDemand(peopleCount: 1 | 2 | 3): MatchingResult {
-    this.totalDemandGenerated += peopleCount;
+  public generateRandomDemand(forcedPeopleCount?: number): HousingDemand {
+    const peopleCount = forcedPeopleCount ?? (Math.floor(Math.random() * 5) + 1);
+    const moveInType: MoveInType = Math.random() < 0.5 ? 'joinExisting' : 'buildNew';
+    const density: HousingDensity = 'Low';
 
-    // 進行臨路、容量與連通道路完整配對檢驗
-    const match = this.findMatchingSiteForDemand(peopleCount);
+    // 隨機自目前模型庫選取 2 個不重複的偏好房型
+    const catalog = BuildingModelFactory.getModelsCatalog();
+    const shuffled = [...catalog].sort(() => Math.random() - 0.5);
+    const preferredModels = [shuffled[0].id, shuffled[1].id];
 
-    if (!match.site || !match.chosenModel) {
-      // 配對失敗：流失住房需求
-      this.totalDemandLost += peopleCount;
-      const res: MatchingResult = {
-        success: false,
-        peopleCount,
-        timestamp: Date.now(),
-        reason: match.failReason || '無滿足條件之地塊或連通道路',
-      };
-      this.latestMatchingResult = res;
-      return res;
-    }
-
-    // 配對成功！起建房屋 (先開始蓋房子，房子蓋好之後才會開車進來)
-    this.totalMatchedSuccess += peopleCount;
-    this.spawnBuilding(match.chosenModel, match.site, peopleCount);
-
-    const res: MatchingResult = {
-      success: true,
+    const demand: HousingDemand = {
+      id: `dem_${this.nextDemandId++}`,
       peopleCount,
-      timestamp: Date.now(),
-      buildingName: match.chosenModel.name,
+      moveInType,
+      density,
+      preferredModels,
+      status: 'pending',
+      createdAt: Date.now(),
     };
-    this.latestMatchingResult = res;
-    return res;
+
+    // 最新需求置於最上方 (清單開頭)
+    this.demandQueue.unshift(demand);
+
+    // 進行核心配對流程
+    this.processDemand(demand);
+
+    return demand;
   }
 
   /**
-   * 尋找滿足下列條件的合法地塊與建築模型：
-   * 1. 房子正面緊貼馬路
-   * 2. 外部道路有路可以通往住處 (可供車子通行的道路)
-   * 3. 房型容量必須大於等於需求人數 (排除人數不足之房型)
+   * 住房需求產生請求 (相容舊呼叫介面)
    */
-  private findMatchingSiteForDemand(peopleCount: number): {
-    site?: {
+  public requestHousingDemand(peopleCount?: number): MatchingResult {
+    this.generateRandomDemand(peopleCount);
+    return this.latestMatchingResult!;
+  }
+
+  /**
+   * 配對需求核心處理：依入住方式分別判定
+   */
+  private processDemand(demand: HousingDemand): void {
+    this.totalDemandGenerated += demand.peopleCount;
+
+    if (demand.moveInType === 'joinExisting') {
+      this.matchJoinExisting(demand);
+    } else {
+      this.matchBuildNew(demand);
+    }
+  }
+
+  /**
+   * 配對條件 1：入住方式選擇「併入別人 (合居)」
+   * 條件 1-1：篩選現有候選房屋（需求密度符合、房型在偏好內、剩餘容量 >= 人數、且已完工建造完畢）
+   * 條件 1-2：隨機洗牌，逐一擲 50%，第一個通過就入住，全部沒過才失敗
+   */
+  private matchJoinExisting(demand: HousingDemand): void {
+    const candidates = Array.from(this.buildings.values()).filter((b) => {
+      // 建造中的房屋無法作為候選房屋
+      if (b.status !== 'completed') return false;
+      // 需求密度符合 (Low 對應 Residential_Low)
+      if (b.metadata.category !== 'Residential_Low') return false;
+      // 房型在偏好內
+      if (!demand.preferredModels.includes(b.modelId)) return false;
+      // 剩餘容量 >= 人數
+      const remainingCapacity = b.metadata.capacity - b.registeredResidents;
+      if (remainingCapacity < demand.peopleCount) return false;
+      return true;
+    });
+
+    if (candidates.length === 0) {
+      demand.status = 'lost';
+      demand.failReason = '無符合偏好房型且容量足夠之已完工房舍可供併入';
+      this.totalDemandLost += demand.peopleCount;
+      this.latestMatchingResult = {
+        success: false,
+        peopleCount: demand.peopleCount,
+        timestamp: Date.now(),
+        reason: demand.failReason,
+        demand,
+      };
+      return;
+    }
+
+    // 條件 1-2：候選房屋隨機洗牌，逐一擲 50%
+    const shuffled = [...candidates].sort(() => Math.random() - 0.5);
+    let chosenBuilding: PlacedBuilding | null = null;
+
+    for (const b of shuffled) {
+      if (Math.random() < 0.5) {
+        chosenBuilding = b;
+        break;
+      }
+    }
+
+    if (!chosenBuilding) {
+      demand.status = 'lost';
+      demand.failReason = `現有 ${candidates.length} 棟符合房舍，但合居媒合意願 (50%) 皆未通過`;
+      this.totalDemandLost += demand.peopleCount;
+      this.latestMatchingResult = {
+        success: false,
+        peopleCount: demand.peopleCount,
+        timestamp: Date.now(),
+        reason: demand.failReason,
+        demand,
+      };
+      return;
+    }
+
+    // 媒合成功！
+    demand.status = 'matched';
+    demand.matchedBuildingId = chosenBuilding.id;
+    demand.matchedBuildingName = chosenBuilding.metadata.name;
+    demand.matchedType = 'joinExisting';
+
+    chosenBuilding.registeredResidents += demand.peopleCount;
+    chosenBuilding.isCoLiving = true;
+
+    this.totalMatchedSuccess += demand.peopleCount;
+    this.latestMatchingResult = {
+      success: true,
+      peopleCount: demand.peopleCount,
+      timestamp: Date.now(),
+      buildingName: chosenBuilding.metadata.name,
+      demand,
+    };
+
+    // 房屋已完工，立即派遣市民開車自邊界公路前往家門，車到消失時正式增加入住人數
+    this.dispatchCitizenVehicle(chosenBuilding, demand.peopleCount);
+  }
+
+  /**
+   * 配對條件 2：選擇「建立新房屋」
+   * 1. 先排除人數不足之房型以及不同密度之房型
+   * 2. 從兩個偏好房型中，隨機選一個開始檢查是否有符合之土地
+   * 3. 第一個無法被滿足則檢查第二個偏好房型，皆不符合則配對失敗流失
+   * (判定候選地時：屬於需求密度住宅區、空間放得下、正面緊貼馬路、已連通外聯道路、未被其他需求預留)
+   */
+  private matchBuildNew(demand: HousingDemand): void {
+    const catalog = BuildingModelFactory.getModelsCatalog();
+
+    // 先排除人數不足之房型以及不同密度之房型 (目前密度為 Low，對應 Residential_Low)
+    const validPreferredModels = demand.preferredModels
+      .map((modelId) => catalog.find((m) => m.id === modelId))
+      .filter((m): m is BuildingMetadata => {
+        if (!m) return false;
+        if (m.category !== 'Residential_Low') return false;
+        if (m.capacity < demand.peopleCount) return false;
+        return true;
+      });
+
+    if (validPreferredModels.length === 0) {
+      demand.status = 'lost';
+      demand.failReason = `偏好房型容量皆小於 ${demand.peopleCount} 人（無法容納此需求人數）`;
+      this.totalDemandLost += demand.peopleCount;
+      this.latestMatchingResult = {
+        success: false,
+        peopleCount: demand.peopleCount,
+        timestamp: Date.now(),
+        reason: demand.failReason,
+        demand,
+      };
+      return;
+    }
+
+    // 從偏好房型中先從隨機某一個開始檢查是否有符合土地
+    const checkOrder = [...validPreferredModels].sort(() => Math.random() - 0.5);
+
+    let chosenModel: BuildingMetadata | null = null;
+    let chosenSite: {
       originZx: number;
       originZz: number;
       facing: 'N' | 'S' | 'E' | 'W';
       targetRoadTileKey: string;
       frontWorldPos: THREE.Vector3;
-    };
-    chosenModel?: BuildingMetadata;
-    failReason?: string;
-  } {
-    const catalog = BuildingModelFactory.getModelsCatalog();
-    const cells = this.zoningManager.getCells();
+    } | null = null;
 
-    let foundSitesCount = 0;
-    let foundRoadTouchingCount = 0;
-    let foundCapacityFitCount = 0;
-    let foundConnectedRoadCount = 0;
+    for (const model of checkOrder) {
+      const site = this.findSiteForModel(model);
+      if (site) {
+        chosenModel = model;
+        chosenSite = site;
+        break;
+      }
+    }
 
-    const candidatePairs: {
-      site: {
-        originZx: number;
-        originZz: number;
-        facing: 'N' | 'S' | 'E' | 'W';
-        targetRoadTileKey: string;
-        frontWorldPos: THREE.Vector3;
+    if (!chosenModel || !chosenSite) {
+      demand.status = 'lost';
+      demand.failReason = '偏好房型無可用建地（未連通外聯道路、正面未貼路或空間不足）';
+      this.totalDemandLost += demand.peopleCount;
+      this.latestMatchingResult = {
+        success: false,
+        peopleCount: demand.peopleCount,
+        timestamp: Date.now(),
+        reason: demand.failReason,
+        demand,
       };
-      model: BuildingMetadata;
+      return;
+    }
+
+    // 成功配對建地！起建新房屋 (進入施工狀態，建造動畫 6s，完工後開車遷入)
+    demand.status = 'matched';
+    demand.matchedBuildingName = chosenModel.name;
+    demand.matchedType = 'buildNew';
+
+    this.totalMatchedSuccess += demand.peopleCount;
+
+    const building = this.spawnBuilding(chosenModel, chosenSite, demand.peopleCount);
+    demand.matchedBuildingId = building.id;
+
+    this.latestMatchingResult = {
+      success: true,
+      peopleCount: demand.peopleCount,
+      timestamp: Date.now(),
+      buildingName: chosenModel.name,
+      demand,
+    };
+  }
+
+  /**
+   * 搜尋指定模型之合法候選建地：
+   * 1. 屬於需求密度之住宅區
+   * 2. 空間放得下該房型且正面緊貼馬路
+   * 3. 已連通外聯道路 (已在選地時完整判定，後續無須重複驗證)
+   * 4. 沒被其他需求預留或佔用
+   */
+  private findSiteForModel(meta: BuildingMetadata): {
+    originZx: number;
+    originZz: number;
+    facing: 'N' | 'S' | 'E' | 'W';
+    targetRoadTileKey: string;
+    frontWorldPos: THREE.Vector3;
+  } | null {
+    const cells = this.zoningManager.getCells();
+    const candidateSites: {
+      originZx: number;
+      originZz: number;
+      facing: 'N' | 'S' | 'E' | 'W';
+      targetRoadTileKey: string;
+      frontWorldPos: THREE.Vector3;
     }[] = [];
+
+    const facings: ('N' | 'S' | 'E' | 'W')[] = ['N', 'S', 'E', 'W'];
 
     for (const cell of cells.values()) {
       if (cell.zoneType !== 'Residential' || this.occupiedCells.has(cell.key)) {
         continue;
       }
 
-      foundSitesCount++;
-      const facings: ('N' | 'S' | 'E' | 'W')[] = ['N', 'S', 'E', 'W'];
-
       for (const facing of facings) {
-        // 篩選：排除人數不足之房型 (capacity >= peopleCount)，且佔地幾何合法
-        const eligibleModels = catalog.filter((meta) => {
-          if (meta.capacity < peopleCount) return false;
-          return this.canFitModelAt(meta, cell.zx, cell.zz, facing);
-        });
-
-        if (eligibleModels.length > 0) {
-          foundCapacityFitCount++;
-          // 在合格的房型中隨機抽取 (規則 4)
-          const chosen = eligibleModels[Math.floor(Math.random() * eligibleModels.length)];
-
-          const { frontWorldPos, roadKey } = this.calculateFrontRoadPoint(
-            cell.zx,
-            cell.zz,
-            chosen.frontageWidth,
-            facing
-          );
-
-          if (roadKey && this.roadNetwork.hasTile(roadKey)) {
-            foundRoadTouchingCount++;
-
-            // 新增條件：從外部道路有路可以通往住處，要有可供車子通行的道路
-            if (this.hasPathFromHighway(roadKey)) {
-              foundConnectedRoadCount++;
-              candidatePairs.push({
-                site: {
-                  originZx: cell.zx,
-                  originZz: cell.zz,
-                  facing,
-                  targetRoadTileKey: roadKey,
-                  frontWorldPos,
-                },
-                model: chosen,
-              });
-            }
-          }
+        // 檢查放得下、正面緊貼馬路、未被佔用
+        if (!this.canFitModelAt(meta, cell.zx, cell.zz, facing)) {
+          continue;
         }
+
+        const { frontWorldPos, roadKey } = this.calculateFrontRoadPoint(
+          cell.zx,
+          cell.zz,
+          meta.frontageWidth,
+          facing
+        );
+
+        if (!roadKey || !this.roadNetwork.hasTile(roadKey)) {
+          continue;
+        }
+
+        // 檢查已連通外聯道路
+        if (!this.hasPathFromHighway(roadKey)) {
+          continue;
+        }
+
+        candidateSites.push({
+          originZx: cell.zx,
+          originZz: cell.zz,
+          facing,
+          targetRoadTileKey: roadKey,
+          frontWorldPos,
+        });
       }
     }
 
-    if (candidatePairs.length > 0) {
-      const picked = candidatePairs[Math.floor(Math.random() * candidatePairs.length)];
-      return { site: picked.site, chosenModel: picked.model };
-    }
-
-    // 分析精確配對失敗原因以供介面回饋
-    let failReason = '全市尚無可用之低密度住宅分區';
-    if (foundRoadTouchingCount > 0 && foundConnectedRoadCount === 0) {
-      failReason = '住處道路尚未連通至外部公路（缺少可供車輛通行之道路）';
-    } else if (foundSitesCount > 0 && foundCapacityFitCount === 0) {
-      failReason = `住宅區空地過小，無法起建可容納 ${peopleCount} 人的房型`;
-    } else if (foundSitesCount > 0) {
-      failReason = '住宅分區正面未貼合馬路，無法合法起建';
-    }
-
-    return { failReason };
+    if (candidateSites.length === 0) return null;
+    return candidateSites[Math.floor(Math.random() * candidateSites.length)];
   }
 
   /**
@@ -269,7 +454,7 @@ export class BuildingManager {
 
   /**
    * 嚴格檢驗指定模型在 (originZx, originZz) 沿 facing 朝向時：
-   * 1. 整個正面 (長度 frontageWidth) 的每一個 1m 格子是否皆緊貼馬路 (規則 1)
+   * 1. 整個正面 (長度 frontageWidth) 的每一個 0.5m 格子是否皆緊貼馬路 (規則 1)
    * 2. 建築佔地 (frontageWidth x lotDepth) 內的所有格子是否皆為已劃分的住宅區且未被佔用
    */
   private canFitModelAt(
@@ -280,12 +465,15 @@ export class BuildingManager {
   ): boolean {
     const W = meta.frontageWidth;
     const D = meta.lotDepth;
+    const cs = this.CELL_SIZE;
 
     switch (facing) {
       case 'S': {
         const frontZ = originZz;
+        const testZ = (frontZ + 1) * cs + 0.25;
         for (let x = originZx; x < originZx + W; x++) {
-          if (!this.isRoadAdjacent(x + 0.5, frontZ + 1.5)) return false;
+          const testX = (x + 0.5) * cs;
+          if (!this.isRoadAdjacent(testX, testZ)) return false;
           for (let z = frontZ - D + 1; z <= frontZ; z++) {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
@@ -298,8 +486,10 @@ export class BuildingManager {
 
       case 'N': {
         const frontZ = originZz;
+        const testZ = frontZ * cs - 0.25;
         for (let x = originZx; x < originZx + W; x++) {
-          if (!this.isRoadAdjacent(x + 0.5, frontZ - 0.5)) return false;
+          const testX = (x + 0.5) * cs;
+          if (!this.isRoadAdjacent(testX, testZ)) return false;
           for (let z = frontZ; z < frontZ + D; z++) {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
@@ -312,8 +502,10 @@ export class BuildingManager {
 
       case 'E': {
         const frontX = originZx;
+        const testX = (frontX + 1) * cs + 0.25;
         for (let z = originZz; z < originZz + W; z++) {
-          if (!this.isRoadAdjacent(frontX + 1.5, z + 0.5)) return false;
+          const testZ = (z + 0.5) * cs;
+          if (!this.isRoadAdjacent(testX, testZ)) return false;
           for (let x = frontX - D + 1; x <= frontX; x++) {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
@@ -326,8 +518,10 @@ export class BuildingManager {
 
       case 'W': {
         const frontX = originZx;
+        const testX = frontX * cs - 0.25;
         for (let z = originZz; z < originZz + W; z++) {
-          if (!this.isRoadAdjacent(frontX - 0.5, z + 0.5)) return false;
+          const testZ = (z + 0.5) * cs;
+          if (!this.isRoadAdjacent(testX, testZ)) return false;
           for (let x = frontX; x < frontX + D; x++) {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
@@ -354,6 +548,7 @@ export class BuildingManager {
     frontageWidth: number,
     facing: 'N' | 'S' | 'E' | 'W'
   ): { frontWorldPos: THREE.Vector3; roadKey: string } {
+    const cs = this.CELL_SIZE;
     let roadGx = 0;
     let roadGz = 0;
     let fx = 0;
@@ -361,27 +556,27 @@ export class BuildingManager {
 
     switch (facing) {
       case 'S':
-        fx = originZx + frontageWidth / 2;
-        fz = originZz + 1.0;
+        fx = (originZx + frontageWidth / 2) * cs;
+        fz = (originZz + 1.0) * cs;
         roadGx = Math.floor(fx / 2) * 2 + 1;
-        roadGz = Math.floor((fz + 0.5) / 2) * 2 + 1;
+        roadGz = Math.floor((fz + 0.25) / 2) * 2 + 1;
         break;
       case 'N':
-        fx = originZx + frontageWidth / 2;
-        fz = originZz;
+        fx = (originZx + frontageWidth / 2) * cs;
+        fz = originZz * cs;
         roadGx = Math.floor(fx / 2) * 2 + 1;
-        roadGz = Math.floor((fz - 0.5) / 2) * 2 + 1;
+        roadGz = Math.floor((fz - 0.25) / 2) * 2 + 1;
         break;
       case 'E':
-        fx = originZx + 1.0;
-        fz = originZz + frontageWidth / 2;
-        roadGx = Math.floor((fx + 0.5) / 2) * 2 + 1;
+        fx = (originZx + 1.0) * cs;
+        fz = (originZz + frontageWidth / 2) * cs;
+        roadGx = Math.floor((fx + 0.25) / 2) * 2 + 1;
         roadGz = Math.floor(fz / 2) * 2 + 1;
         break;
       case 'W':
-        fx = originZx;
-        fz = originZz + frontageWidth / 2;
-        roadGx = Math.floor((fx - 0.5) / 2) * 2 + 1;
+        fx = originZx * cs;
+        fz = (originZz + frontageWidth / 2) * cs;
+        roadGx = Math.floor((fx - 0.25) / 2) * 2 + 1;
         roadGz = Math.floor(fz / 2) * 2 + 1;
         break;
     }
@@ -406,7 +601,7 @@ export class BuildingManager {
       frontWorldPos: THREE.Vector3;
     },
     peopleCount: number
-  ): void {
+  ): PlacedBuilding {
     const W = meta.frontageWidth;
     const D = meta.lotDepth;
     const occupiedKeys: string[] = [];
@@ -451,29 +646,30 @@ export class BuildingManager {
         break;
     }
 
+    const cs = this.CELL_SIZE;
     let cx = 0;
     let cz = 0;
     let rotY = 0;
 
     switch (site.facing) {
       case 'S':
-        cx = site.originZx + W / 2;
-        cz = site.originZz - D / 2 + 1.0;
+        cx = (site.originZx + W / 2) * cs;
+        cz = (site.originZz - D / 2 + 1.0) * cs;
         rotY = 0;
         break;
       case 'N':
-        cx = site.originZx + W / 2;
-        cz = site.originZz + D / 2;
+        cx = (site.originZx + W / 2) * cs;
+        cz = (site.originZz + D / 2) * cs;
         rotY = Math.PI;
         break;
       case 'E':
-        cx = site.originZx - D / 2 + 1.0;
-        cz = site.originZz + W / 2;
+        cx = (site.originZx - D / 2 + 1.0) * cs;
+        cz = (site.originZz + W / 2) * cs;
         rotY = Math.PI / 2;
         break;
       case 'W':
-        cx = site.originZx + D / 2;
-        cz = site.originZz + W / 2;
+        cx = (site.originZx + D / 2) * cs;
+        cz = (site.originZz + W / 2) * cs;
         rotY = -Math.PI / 2;
         break;
     }
@@ -484,15 +680,15 @@ export class BuildingManager {
     buildingGroup.position.copy(worldCenter);
     buildingGroup.rotation.y = rotY;
 
-    // 建築實體 (初起建時沉於地底)
+    // 建築實體 (初起建時沉於地底，配合 1/4 面積建築沉降深度為 -0.4)
     const buildingMesh = BuildingModelFactory.createBuildingById(meta.id)!;
-    buildingMesh.position.y = -0.8;
+    buildingMesh.position.y = -0.4;
     buildingMesh.scale.set(1.0, 0.05, 1.0);
     buildingGroup.add(buildingMesh);
 
-    // 施工鷹架與警示信號燈 (規則 5)
-    const scaffoldingGroup = this.createScaffoldingMesh(W, D);
-    buildingGroup.add(scaffoldingGroup);
+    // 施工鷹架、警示信號燈與作業起重吊臂 (傳入實際米數寬度 W*cs 與縱深 D*cs)
+    const constructionSite = this.createConstructionSiteMesh(W * cs, D * cs);
+    buildingGroup.add(constructionSite.container);
 
     this.buildingsContainer.add(buildingGroup);
 
@@ -516,23 +712,55 @@ export class BuildingManager {
       targetRoadTileKey: site.targetRoadTileKey,
       group: buildingGroup,
       buildingMesh,
-      scaffoldingGroup,
+      scaffoldingGroup: constructionSite.container,
       status: 'constructing',
       constructionProgress: 0.0,
-      constructionDuration: 6.0,
+      constructionDuration: 18.0, // 建造時間為原先 6.0s 的 3 倍 = 18.0s (以遊戲模擬時間推進)
       registeredResidents: peopleCount,
       currentOccupants: 0,
       isCoLiving,
       moveInStatus: 'none',
+      craneRefs: constructionSite.craneRefs,
     };
 
     this.buildings.set(building.id, building);
     buildingGroup.userData = { buildingId: building.id };
+    return building;
   }
 
-  private createScaffoldingMesh(w: number, d: number): THREE.Group {
-    const scaf = new THREE.Group();
-    scaf.name = 'ScaffoldingGroup';
+  /**
+   * 建立施工現場視覺組合：
+   * 1. 建築周邊鷹架框架 (Scaffolding) 與旋轉警示信號燈
+   * 2. 全功能作業塔式起重吊臂 (Construction Tower Crane)：
+   *    - 四角角柱桁架塔身與底座配重
+   *    - 迴轉駕駛室與塔頂 A 型尖架
+   *    - 後方平衡臂與水泥平衡配重塊
+   *    - 前方主作業起重臂 (三角格構桁架)
+   *    - 沿臂前後滑動之變幅小車 (Trolley)
+   *    - 起升鋼纜、滑輪吊鉤、以及吊索下懸掛微晃的建築工字鋼樑 (Working Cargo)
+   */
+  private createConstructionSiteMesh(w: number, d: number): {
+    container: THREE.Group;
+    craneRefs: {
+      slewArm: THREE.Group;
+      trolley: THREE.Group;
+      cable: THREE.Mesh;
+      hookAndCargo: THREE.Group;
+      beacon: THREE.Mesh;
+      baseAngle: number;
+      jibLength: number;
+      mastHeight: number;
+      animTimer: number;
+    };
+  } {
+    const siteGroup = new THREE.Group();
+    siteGroup.name = 'ConstructionSiteGroup';
+
+    // ----------------------------------------
+    // 1. 周邊施工鷹架 (Scaffolding Frame)
+    // ----------------------------------------
+    const scaffoldingGroup = new THREE.Group();
+    scaffoldingGroup.name = 'ScaffoldingGroup';
 
     const poleMat = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
@@ -542,7 +770,7 @@ export class BuildingManager {
 
     const hw = w / 2;
     const hd = d / 2;
-    const height = 1.8;
+    const scafHeight = 0.95;
 
     const corners = [
       [-hw, -hd],
@@ -551,42 +779,368 @@ export class BuildingManager {
       [hw, hd],
     ];
 
-    const poleGeo = new THREE.CylinderGeometry(0.025, 0.025, height, 6);
+    const poleGeo = new THREE.CylinderGeometry(0.012, 0.012, scafHeight, 6);
     corners.forEach(([px, pz]) => {
       const pole = new THREE.Mesh(poleGeo, poleMat);
-      pole.position.set(px, height / 2, pz);
-      scaf.add(pole);
+      pole.position.set(px, scafHeight / 2, pz);
+      scaffoldingGroup.add(pole);
     });
 
-    const barGeoX = new THREE.BoxGeometry(w, 0.03, 0.03);
-    const barGeoZ = new THREE.BoxGeometry(0.03, 0.03, d);
+    const barGeoX = new THREE.BoxGeometry(w, 0.016, 0.016);
+    const barGeoZ = new THREE.BoxGeometry(0.016, 0.016, d);
 
-    [height * 0.45, height * 0.95].forEach((y) => {
+    [scafHeight * 0.45, scafHeight * 0.95].forEach((y) => {
       const barN = new THREE.Mesh(barGeoX, poleMat);
       barN.position.set(0, y, -hd);
-      scaf.add(barN);
+      scaffoldingGroup.add(barN);
 
       const barS = new THREE.Mesh(barGeoX, poleMat);
       barS.position.set(0, y, hd);
-      scaf.add(barS);
+      scaffoldingGroup.add(barS);
 
       const barW = new THREE.Mesh(barGeoZ, poleMat);
       barW.position.set(-hw, y, 0);
-      scaf.add(barW);
+      scaffoldingGroup.add(barW);
 
       const barE = new THREE.Mesh(barGeoZ, poleMat);
       barE.position.set(hw, y, 0);
-      scaf.add(barE);
+      scaffoldingGroup.add(barE);
     });
 
-    const beaconGeo = new THREE.SphereGeometry(0.08, 8, 8);
-    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
-    const beacon = new THREE.Mesh(beaconGeo, beaconMat);
-    beacon.name = 'scaffoldingBeacon';
-    beacon.position.set(hw, height + 0.1, hd);
-    scaf.add(beacon);
+    const scafBeaconGeo = new THREE.SphereGeometry(0.04, 8, 8);
+    const scafBeaconMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    const scafBeacon = new THREE.Mesh(scafBeaconGeo, scafBeaconMat);
+    scafBeacon.name = 'scaffoldingBeacon';
+    scafBeacon.position.set(hw, scafHeight + 0.05, hd);
+    scaffoldingGroup.add(scafBeacon);
 
-    return scaf;
+    siteGroup.add(scaffoldingGroup);
+
+    // ----------------------------------------
+    // 2. 施工塔式起重吊臂 (Construction Tower Crane)
+    // ----------------------------------------
+    const craneGroup = new THREE.Group();
+    craneGroup.name = 'ConstructionCraneGroup';
+
+    // 吊臂立足點：置於庭院後側角落 (內部邊界內)，不遮擋正門路面與入戶通道
+    const baseX = hw - 0.14;
+    const baseZ = -hd + 0.14;
+    craneGroup.position.set(baseX, 0, baseZ);
+
+    const craneYellowMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      metalness: 0.65,
+      roughness: 0.35,
+    });
+    const craneDarkMat = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      metalness: 0.8,
+      roughness: 0.3,
+    });
+    const concreteMat = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.9,
+      metalness: 0.1,
+    });
+    const cableMat = new THREE.MeshStandardMaterial({
+      color: 0x94a3b8,
+      metalness: 0.85,
+      roughness: 0.25,
+    });
+    const beamRedMat = new THREE.MeshStandardMaterial({
+      color: 0xc2410c, // 施工鋼構防鏽紅漆
+      metalness: 0.7,
+      roughness: 0.4,
+    });
+
+    // 塔身高於鷹架與屋頂 (約 1.35m ~ 1.7m)
+    const mastHeight = Math.max(1.35, 0.95 + Math.max(w, d) * 0.32);
+    const mastW = 0.08;
+    const mhw = mastW / 2;
+
+    // 地基鋼板
+    const basePlateGeo = new THREE.BoxGeometry(0.16, 0.02, 0.16);
+    const basePlate = new THREE.Mesh(basePlateGeo, craneDarkMat);
+    basePlate.position.y = 0.01;
+    craneGroup.add(basePlate);
+
+    // 塔身四根立柱 (Vertical Corner Posts)
+    const mastPostGeo = new THREE.CylinderGeometry(0.006, 0.006, mastHeight, 6);
+    [
+      [-mhw, -mhw],
+      [mhw, -mhw],
+      [-mhw, mhw],
+      [mhw, mhw],
+    ].forEach(([px, pz]) => {
+      const post = new THREE.Mesh(mastPostGeo, craneYellowMat);
+      post.position.set(px, mastHeight / 2, pz);
+      craneGroup.add(post);
+    });
+
+    // 塔身水平橫桿與對角斜撐腹桿 (Mast Lattice Truss Bracing)
+    const rungLevels = Math.floor(mastHeight / 0.18);
+    const hBarGeoX = new THREE.BoxGeometry(mastW, 0.006, 0.006);
+    const hBarGeoZ = new THREE.BoxGeometry(0.006, 0.006, mastW);
+    const diagGeo = new THREE.BoxGeometry(Math.hypot(mastW, 0.18), 0.005, 0.005);
+
+    for (let i = 1; i <= rungLevels; i++) {
+      const ry = i * 0.18;
+      if (ry >= mastHeight - 0.05) break;
+
+      const barN = new THREE.Mesh(hBarGeoX, craneYellowMat);
+      barN.position.set(0, ry, -mhw);
+      craneGroup.add(barN);
+
+      const barS = new THREE.Mesh(hBarGeoX, craneYellowMat);
+      barS.position.set(0, ry, mhw);
+      craneGroup.add(barS);
+
+      const barW = new THREE.Mesh(hBarGeoZ, craneYellowMat);
+      barW.position.set(-mhw, ry, 0);
+      craneGroup.add(barW);
+
+      const barE = new THREE.Mesh(hBarGeoZ, craneYellowMat);
+      barE.position.set(mhw, ry, 0);
+      craneGroup.add(barE);
+
+      const diag1 = new THREE.Mesh(diagGeo, craneYellowMat);
+      diag1.position.set(0, ry - 0.09, mhw);
+      diag1.rotation.z = Math.atan2(0.18, mastW);
+      craneGroup.add(diag1);
+    }
+
+    // ----------------------------------------
+    // 3. 迴轉上部構造 (Slewing Arm Assembly)
+    // ----------------------------------------
+    const slewArm = new THREE.Group();
+    slewArm.name = 'CraneSlewArm';
+    slewArm.position.set(0, mastHeight, 0);
+
+    // 迴轉支承座 (Turntable)
+    const turnTableGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.03, 12);
+    const turnTable = new THREE.Mesh(turnTableGeo, craneDarkMat);
+    turnTable.position.y = 0.015;
+    slewArm.add(turnTable);
+
+    // 駕駛室 (Operator Cabin)
+    const cabGroup = new THREE.Group();
+    const cabBodyGeo = new THREE.BoxGeometry(0.08, 0.11, 0.10);
+    const cabBody = new THREE.Mesh(cabBodyGeo, craneYellowMat);
+    cabGroup.add(cabBody);
+
+    const cabWindowMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      roughness: 0.2,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.75,
+    });
+    const cabWinGeo = new THREE.BoxGeometry(0.082, 0.06, 0.06);
+    const cabWin = new THREE.Mesh(cabWinGeo, cabWindowMat);
+    cabWin.position.set(0, 0.015, 0.025);
+    cabGroup.add(cabWin);
+
+    cabGroup.position.set(0.06, 0.06, 0.03);
+    slewArm.add(cabGroup);
+
+    // 塔頂尖架 (A-Frame Tower Apex)
+    const apexHeight = 0.28;
+    const apexGroup = new THREE.Group();
+    const apexLegGeo = new THREE.CylinderGeometry(0.005, 0.005, Math.hypot(mhw, apexHeight), 6);
+
+    [
+      [-mhw, -mhw],
+      [mhw, -mhw],
+      [-mhw, mhw],
+      [mhw, mhw],
+    ].forEach(([px, pz]) => {
+      const leg = new THREE.Mesh(apexLegGeo, craneYellowMat);
+      leg.position.set(px / 2, apexHeight / 2, pz / 2);
+      leg.rotation.z = (px > 0 ? -1 : 1) * Math.atan2(mhw, apexHeight);
+      leg.rotation.x = (pz > 0 ? 1 : -1) * Math.atan2(mhw, apexHeight);
+      apexGroup.add(leg);
+    });
+
+    // 塔頂航空警示閃爍燈 (Top Aviation Beacon)
+    const beaconGeo = new THREE.SphereGeometry(0.02, 8, 8);
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+    const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+    beacon.position.set(0, apexHeight + 0.015, 0);
+    apexGroup.add(beacon);
+
+    slewArm.add(apexGroup);
+
+    // ----------------------------------------
+    // 4. 平衡臂與水泥配重塊 (Counter-Jib & Weights)
+    // ----------------------------------------
+    const counterJibLen = 0.42;
+    const counterJib = new THREE.Group();
+
+    const cBeamGeo = new THREE.BoxGeometry(counterJibLen, 0.015, 0.06);
+    const cBeam = new THREE.Mesh(cBeamGeo, craneYellowMat);
+    cBeam.position.set(-counterJibLen / 2, 0.025, 0);
+    counterJib.add(cBeam);
+
+    const weightGeo = new THREE.BoxGeometry(0.12, 0.11, 0.08);
+    const weight = new THREE.Mesh(weightGeo, concreteMat);
+    weight.position.set(-counterJibLen + 0.06, 0.06, 0);
+    counterJib.add(weight);
+
+    const cTieGeo = new THREE.CylinderGeometry(0.003, 0.003, Math.hypot(counterJibLen * 0.8, apexHeight), 4);
+    const cTie = new THREE.Mesh(cTieGeo, cableMat);
+    cTie.position.set(-counterJibLen * 0.4, apexHeight / 2 + 0.025, 0);
+    cTie.rotation.z = Math.atan2(counterJibLen * 0.8, apexHeight);
+    counterJib.add(cTie);
+
+    slewArm.add(counterJib);
+
+    // ----------------------------------------
+    // 5. 起重臂作業工作臂 (Main Jib Lattice Boom)
+    // ----------------------------------------
+    const jibLength = Math.max(1.15, Math.hypot(w, d) * 0.86);
+    const mainJib = new THREE.Group();
+
+    const railGeo = new THREE.BoxGeometry(jibLength, 0.008, 0.008);
+    const botRail1 = new THREE.Mesh(railGeo, craneYellowMat);
+    botRail1.position.set(jibLength / 2, 0.01, -0.025);
+    mainJib.add(botRail1);
+
+    const botRail2 = new THREE.Mesh(railGeo, craneYellowMat);
+    botRail2.position.set(jibLength / 2, 0.01, 0.025);
+    mainJib.add(botRail2);
+
+    const topRail = new THREE.Mesh(railGeo, craneYellowMat);
+    topRail.position.set(jibLength / 2, 0.06, 0);
+    mainJib.add(topRail);
+
+    const segCount = Math.floor(jibLength / 0.15);
+    for (let i = 1; i <= segCount; i++) {
+      const jx = i * 0.15;
+      const xBar = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.005, 0.05), craneYellowMat);
+      xBar.position.set(jx, 0.01, 0);
+      mainJib.add(xBar);
+
+      const vBar1 = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.05, 0.005), craneYellowMat);
+      vBar1.position.set(jx, 0.035, -0.012);
+      vBar1.rotation.z = 0.1;
+      mainJib.add(vBar1);
+
+      const vBar2 = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.05, 0.005), craneYellowMat);
+      vBar2.position.set(jx, 0.035, 0.012);
+      vBar2.rotation.z = -0.1;
+      mainJib.add(vBar2);
+    }
+
+    // 主起重臂拉索 (Main Jib Tie Cables from Apex)
+    const tieDist1 = jibLength * 0.45;
+    const tie1Geo = new THREE.CylinderGeometry(0.003, 0.003, Math.hypot(tieDist1, apexHeight), 4);
+    const tie1 = new THREE.Mesh(tie1Geo, cableMat);
+    tie1.position.set(tieDist1 / 2, apexHeight / 2 + 0.025, 0);
+    tie1.rotation.z = -Math.atan2(tieDist1, apexHeight);
+    mainJib.add(tie1);
+
+    const tieDist2 = jibLength * 0.78;
+    const tie2Geo = new THREE.CylinderGeometry(0.003, 0.003, Math.hypot(tieDist2, apexHeight), 4);
+    const tie2 = new THREE.Mesh(tie2Geo, cableMat);
+    tie2.position.set(tieDist2 / 2, apexHeight / 2 + 0.025, 0);
+    tie2.rotation.z = -Math.atan2(tieDist2, apexHeight);
+    mainJib.add(tie2);
+
+    slewArm.add(mainJib);
+
+    // ----------------------------------------
+    // 6. 變幅載重小車 (Trolley)
+    // ----------------------------------------
+    const trolley = new THREE.Group();
+    trolley.name = 'CraneTrolley';
+    const trolleyBodyGeo = new THREE.BoxGeometry(0.06, 0.02, 0.07);
+    const trolleyBody = new THREE.Mesh(trolleyBodyGeo, craneDarkMat);
+    trolley.add(trolleyBody);
+    trolley.position.set(jibLength * 0.5, 0.005, 0);
+    slewArm.add(trolley);
+
+    // ----------------------------------------
+    // 7. 起升鋼纜、吊鉤與吊掛鋼樑 (Cable, Hook & Cargo)
+    // ----------------------------------------
+    const cableGeo = new THREE.CylinderGeometry(0.002, 0.002, 1.0, 4);
+    const cable = new THREE.Mesh(cableGeo, cableMat);
+    cable.name = 'CraneCable';
+    slewArm.add(cable);
+
+    const hookAndCargo = new THREE.Group();
+    hookAndCargo.name = 'CraneHookAndCargo';
+
+    const blockGeo = new THREE.BoxGeometry(0.035, 0.045, 0.03);
+    const hookBlock = new THREE.Mesh(blockGeo, craneYellowMat);
+    hookAndCargo.add(hookBlock);
+
+    const hookRingGeo = new THREE.TorusGeometry(0.016, 0.004, 6, 12, Math.PI * 1.3);
+    const hookRing = new THREE.Mesh(hookRingGeo, craneDarkMat);
+    hookRing.position.set(0, -0.03, 0);
+    hookRing.rotation.z = -Math.PI * 0.65;
+    hookAndCargo.add(hookRing);
+
+    // 鋼索索具
+    const sling1Geo = new THREE.CylinderGeometry(0.0015, 0.0015, 0.11, 4);
+    const sling1 = new THREE.Mesh(sling1Geo, cableMat);
+    sling1.position.set(-0.08, -0.075, 0);
+    sling1.rotation.z = 0.55;
+    hookAndCargo.add(sling1);
+
+    const sling2 = new THREE.Mesh(sling1Geo, cableMat);
+    sling2.position.set(0.08, -0.075, 0);
+    sling2.rotation.z = -0.55;
+    hookAndCargo.add(sling2);
+
+    // 吊運中的兩根大型建築工字鋼樑
+    const beamLength = 0.42;
+    const beamGroup = new THREE.Group();
+    beamGroup.position.set(0, -0.13, 0);
+
+    [-0.022, 0.022].forEach((bz) => {
+      const web = new THREE.Mesh(new THREE.BoxGeometry(beamLength, 0.035, 0.006), beamRedMat);
+      web.position.set(0, 0, bz);
+      beamGroup.add(web);
+
+      const flangeT = new THREE.Mesh(new THREE.BoxGeometry(beamLength, 0.006, 0.022), beamRedMat);
+      flangeT.position.set(0, 0.017, bz);
+      beamGroup.add(flangeT);
+
+      const flangeB = new THREE.Mesh(new THREE.BoxGeometry(beamLength, 0.006, 0.022), beamRedMat);
+      flangeB.position.set(0, -0.017, bz);
+      beamGroup.add(flangeB);
+    });
+
+    [-0.12, 0.12].forEach((sx) => {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.045, 0.07), craneDarkMat);
+      strap.position.set(sx, 0, 0);
+      beamGroup.add(strap);
+    });
+
+    hookAndCargo.add(beamGroup);
+    slewArm.add(hookAndCargo);
+
+    craneGroup.add(slewArm);
+    siteGroup.add(craneGroup);
+
+    // 初始朝向：吊臂指向建築中心
+    const baseAngle = Math.atan2(-baseZ, -baseX);
+    slewArm.rotation.y = baseAngle;
+
+    return {
+      container: siteGroup,
+      craneRefs: {
+        slewArm,
+        trolley,
+        cable,
+        hookAndCargo,
+        beacon,
+        baseAngle,
+        jibLength,
+        mastHeight,
+        animTimer: 0,
+      },
+    };
   }
 
   // ==========================================
@@ -601,13 +1155,50 @@ export class BuildingManager {
         building.constructionProgress += deltaTime / building.constructionDuration;
 
         const prog = Math.min(1.0, building.constructionProgress);
-        building.buildingMesh.position.y = (prog - 1.0) * 0.8;
+        building.buildingMesh.position.y = (prog - 1.0) * 0.4;
         building.buildingMesh.scale.set(1.0, Math.max(0.05, prog), 1.0);
 
-        const beacon = building.scaffoldingGroup.getObjectByName('scaffoldingBeacon') as THREE.Mesh;
-        if (beacon && beacon.material instanceof THREE.MeshBasicMaterial) {
-          const blink = (Math.sin(Date.now() * 0.008) + 1) * 0.5;
-          beacon.material.color.setRGB(1.0, 0.8 * blink, 0.1);
+        // 驅動施工吊臂作業動態動畫 (迴轉、變幅、起升、微晃、警示燈)
+        if (building.craneRefs) {
+          const refs = building.craneRefs;
+          refs.animTimer += deltaTime;
+          const t = refs.animTimer;
+
+          // 1. 吊臂迴轉作業：在基礎角周圍平滑往復掃動 (以遊戲時間推進)
+          const swingAngle = Math.sin(t * 0.45) * 0.72 + Math.sin(t * 0.9) * 0.18;
+          refs.slewArm.rotation.y = refs.baseAngle + swingAngle;
+
+          // 2. 變幅小車沿臂前後滑移
+          const minReach = refs.jibLength * 0.35;
+          const maxReach = refs.jibLength * 0.82;
+          const reachFactor = (Math.sin(t * 0.6 + 1.2) + 1) * 0.5;
+          const currentReach = minReach + (maxReach - minReach) * reachFactor;
+          refs.trolley.position.x = currentReach;
+
+          // 3. 鋼纜起升與吊鉤升降
+          const minDrop = refs.mastHeight * 0.35;
+          const maxDrop = refs.mastHeight * 0.75;
+          const dropFactor = (Math.sin(t * 0.75 + 2.5) + 1) * 0.5;
+          const currentDrop = minDrop + (maxDrop - minDrop) * dropFactor;
+
+          refs.cable.scale.set(1, currentDrop, 1);
+          refs.cable.position.set(currentReach, -currentDrop / 2, 0);
+          refs.hookAndCargo.position.set(currentReach, -currentDrop, 0);
+
+          // 4. 吊掛鋼樑隨動微晃
+          refs.hookAndCargo.rotation.z = Math.sin(t * 1.5) * 0.07;
+          refs.hookAndCargo.rotation.x = Math.cos(t * 1.2) * 0.05;
+
+          // 5. 塔頂航空警示紅燈以遊戲時間閃爍
+          const isBlinkOn = Math.floor(t * 3.0) % 2 === 0;
+          (refs.beacon.material as THREE.MeshBasicMaterial).color.setHex(isBlinkOn ? 0xef4444 : 0x450a0a);
+
+          // 6. 鷹架警示燈亦以遊戲時間平滑呼吸閃爍
+          const beacon = building.scaffoldingGroup.getObjectByName('scaffoldingBeacon') as THREE.Mesh;
+          if (beacon && beacon.material instanceof THREE.MeshBasicMaterial) {
+            const blink = (Math.sin(t * 5.0) + 1) * 0.5;
+            beacon.material.color.setRGB(1.0, 0.8 * blink, 0.1);
+          }
         }
 
         if (building.constructionProgress >= 1.0) {
@@ -630,14 +1221,15 @@ export class BuildingManager {
     building.buildingMesh.scale.set(1.0, 1.0, 1.0);
     building.group.remove(building.scaffoldingGroup);
 
-    // 觸發市民開車自邊界公路進入城市
-    this.dispatchCitizenVehicle(building);
+    // 觸發市民開車自邊界公路進入城市，遷入已登記之首批居民
+    this.dispatchCitizenVehicle(building, building.registeredResidents);
   }
 
   /**
    * 派遣市民車輛自外部邊界公路開車進入城市直達住處家門
+   * @param arrivingCount 本批抵達遷入之市民人數
    */
-  private dispatchCitizenVehicle(building: PlacedBuilding): void {
+  private dispatchCitizenVehicle(building: PlacedBuilding, arrivingCount: number): void {
     const roadTile = this.roadNetwork.getTile(building.targetRoadTileKey);
     if (!roadTile || roadTile.lanes.length === 0) {
       building.moveInStatus = 'waitingForRoad';
@@ -688,8 +1280,8 @@ export class BuildingManager {
     const chosenColor = carColors[Math.floor(Math.random() * carColors.length)];
 
     this.vehicleManager.spawnMovingInVehicle(bestPath, chosenColor, () => {
-      // 開車抵達家門前消失，房內人數正式生效
-      building.currentOccupants = building.registeredResidents;
+      // 開車抵達家門前消失，房內人數正式生效 (增加本次遷入之市民人數)
+      building.currentOccupants += arrivingCount;
       building.moveInStatus = 'arrived';
     });
   }
@@ -782,7 +1374,7 @@ export class BuildingManager {
 
       this.tooltipElement.innerHTML = `
         <div style="font-weight: bold; font-size: 13px; color: #fbbf24; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-          <span>🏗️</span> ${meta.name} (建造中)
+          <span>🏗️</span> ${meta.name} (建造中 · 吊臂作業中)
         </div>
         <div style="margin: 6px 0;">
           <div style="display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; margin-bottom: 2px;">
@@ -861,6 +1453,14 @@ export class BuildingManager {
       matched: this.totalMatchedSuccess,
       lost: this.totalDemandLost,
     };
+  }
+
+  public getDemandQueue(): HousingDemand[] {
+    return this.demandQueue;
+  }
+
+  public clearDemandQueue(): void {
+    this.demandQueue = [];
   }
 
   public getLatestMatchingResult(): MatchingResult | null {

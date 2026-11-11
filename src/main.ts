@@ -8,6 +8,7 @@ import { RoadManager } from './systems/RoadManager';
 import { ZoningManager } from './systems/ZoningManager';
 import { BuildMenu } from './ui/BuildMenu';
 import { VehicleManager } from './simulation/VehicleManager';
+import { ParkingManager } from './simulation/ParkingManager';
 import { DevMenu } from './ui/DevMenu';
 import { BuildingManager } from './systems/BuildingManager';
 
@@ -133,8 +134,9 @@ if (container) {
   const buildMenu = new BuildMenu(roadManager, zoningManager);
   void buildMenu;
 
-  // 9. 車輛行駛系統與左上角開發者選單
+  // 9. 車輛行駛系統、路邊停車系統與左上角開發者選單
   const vehicleManager = new VehicleManager(scene, roadManager.getRoadNetwork());
+  const parkingManager = new ParkingManager(scene, roadManager.getRoadNetwork());
   const devMenu = new DevMenu(
     renderer.domElement,
     camera,
@@ -143,6 +145,7 @@ if (container) {
     roadManager.getRoadNetwork(),
     vehicleManager
   );
+  devMenu.setParkingManager(parkingManager);
 
   // 10. 住宅建築生成與市民生命週期管理器
   const buildingManager = new BuildingManager(
@@ -169,17 +172,19 @@ if (container) {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
 
-    // 更新時間與模擬
+    // 更新時間與模擬 (支援暫停與倍速)
     timeManager.update(delta);
+    const simDelta = timeManager.getSimulationDelta(delta);
+    const isPaused = timeManager.getIsPaused();
 
     // 更新道路網絡（紅綠燈號誌倒數計時與狀態切換）
-    roadManager.update(delta, timeManager.getIsPaused());
+    roadManager.update(simDelta, isPaused);
 
     // 更新車輛行駛與號誌停等模擬
-    vehicleManager.update(delta, timeManager.getIsPaused());
+    vehicleManager.update(simDelta, isPaused);
 
-    // 更新建築系統（房屋建造動畫、市民開車遷入）
-    buildingManager.update(delta, timeManager.getIsPaused());
+    // 更新建築系統（房屋建造進度、吊臂作業、完工市民開車遷入）
+    buildingManager.update(simDelta, isPaused);
 
     // 動態更新底部狀態欄人口
     const totalPop = buildingManager.getTotalPopulation();

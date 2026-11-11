@@ -145,8 +145,8 @@ export class VehicleModelFactory {
       group.add(wheelGroup);
     }
 
-    // 車身整體等比縮放 * 0.9 (符合二車道路面車道淨寬比例)
-    group.scale.set(0.9, 0.9, 0.9);
+    // 車身整體等比縮放 * 0.45 (依需求調整為原先的一半大小，符合路寬、車道淨距與路邊停車比例)
+    group.scale.set(0.45, 0.45, 0.45);
 
     return group;
   }
