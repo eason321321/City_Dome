@@ -11,6 +11,7 @@ import { VehicleManager } from './simulation/VehicleManager';
 import { ParkingManager } from './simulation/ParkingManager';
 import { DevMenu } from './ui/DevMenu';
 import { BuildingManager } from './systems/BuildingManager';
+import { BackgroundTimer } from './simulation/BackgroundTimer';
 
 console.log('🏗️ City Dome 城市建造模擬器初始化中...');
 
@@ -167,13 +168,15 @@ if (container) {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  // 12. 主渲染與模擬循環
+  // 12. 主渲染與模擬循環（支援前景 60+ FPS 與背景分頁 30 FPS 持續模擬）
   const clock = new THREE.Clock();
 
-  function animate() {
-    requestAnimationFrame(animate);
-    const delta = clock.getDelta();
-    // 限制單幀模擬步長（最大 0.1s），防止瀏覽器切換分頁或暫時卡頓導致物理模擬穿透或突躍
+  /**
+   * 城市底層模擬步長計算
+   * 包含：遊戲世界時間推進、路口號誌倒數、車輛行進、住宅施工與人口動態
+   */
+  function stepSimulation(delta: number): void {
+    // 限制單幀模擬步長（最大 0.1s），防止短暫卡頓導致物理模擬穿透或突躍
     const clampedDelta = Math.min(delta, 0.1);
 
     // 更新時間與模擬 (支援暫停與倍速，嚴格依遊戲世界時間推進)
@@ -196,7 +199,12 @@ if (container) {
       initialWorldState.stats.population = totalPop;
       bottomStatusBar.updateStats({ population: totalPop });
     }
+  }
 
+  /**
+   * 前景 3D 畫面繪製與相機互動更新 (僅在分頁可見時執行，背景完全釋放 GPU)
+   */
+  function renderFrame(delta: number): void {
     // 更新開發者選單（模型展台旋轉更新、房屋需求監控等）
     devMenu.update(delta);
 
@@ -204,7 +212,63 @@ if (container) {
     cameraManager.update(delta);
     renderer.render(scene, camera);
   }
-  animate();
+
+  // 建立背景心跳計時器：分頁切至背景時以 30 FPS 穩定推進城市，不浪費 GPU 算力
+  const backgroundTimer = new BackgroundTimer(30, (bgDelta) => {
+    stepSimulation(bgDelta);
+  });
+
+  let animationFrameId: number | null = null;
+
+  function animate() {
+    if (document.hidden) {
+      animationFrameId = null;
+      return;
+    }
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    const delta = clock.getDelta();
+    stepSimulation(delta);
+    renderFrame(delta);
+  }
+
+  // 監聽瀏覽器切換分頁與視窗最小化
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      // 切換至背景：停止 requestAnimationFrame 繪圖，改由 Web Worker 心跳維持模擬
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      backgroundTimer.start();
+    } else {
+      // 回到前景：停止背景心跳，重置計時器，恢復流暢 60+ FPS 渲染
+      backgroundTimer.stop();
+      clock.getDelta(); // 消除背景期間累積的單幀突躍
+      if (animationFrameId === null) {
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    }
+  });
+
+  // 依當前初始分頁狀態啟動相應循環
+  if (document.hidden) {
+    backgroundTimer.start();
+  } else {
+    animate();
+  }
+
+  // 暴露全域除錯物件供開發者與測試工具使用
+  (window as any).__cityDome = {
+    roadManager,
+    zoningManager,
+    buildingManager,
+    vehicleManager,
+    parkingManager,
+    devMenu,
+    buildMenu,
+  };
 
   console.log('✅ 底部狀態欄 UI 與時間推進系統已就緒！初始狀態：', initialWorldState);
 }

@@ -3,10 +3,10 @@ import * as THREE from 'three';
 export interface BuildingMetadata {
   id: string;
   name: string;
-  category: 'Residential_Low';
+  category: 'Residential_Low' | 'Industrial_Low';
   frontageWidth: number;   // 面寬格數 (每格 0.5m)
   lotDepth: number;        // 縱深格數 (每格 0.5m)
-  capacity: number;        // 居住人口上限 (人數)
+  capacity: number;        // 居住人口上限 / 工作人數上限
   description: string;
   features: string[];
 }
@@ -200,6 +200,221 @@ export class BuildingModelFactory {
   private static flowerYellowMat = new THREE.MeshStandardMaterial({
     color: 0xfab005, // 明亮暖黃花瓣
     roughness: 0.7,
+  });
+
+  // ==========================================
+  // 工業區專屬材質 (Industrial Materials)
+  // ==========================================
+  private static concreteIndYardMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8, // 硬質混擬土廠區地坪
+    roughness: 0.82,
+    metalness: 0.08,
+  });
+
+  private static concreteIndOilStainMat = new THREE.MeshStandardMaterial({
+    color: 0x475569, // 地面油漬/輪胎磨痕
+    roughness: 0.9,
+    metalness: 0.05,
+  });
+
+  private static asphaltIndYardMat = new THREE.MeshStandardMaterial({
+    color: 0x334155, // 瀝青轉運廣場地坪
+    roughness: 0.88,
+    metalness: 0.1,
+  });
+
+  private static curbIndDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x64748b, // 廠區邊界基台與路緣
+    roughness: 0.8,
+    metalness: 0.1,
+  });
+
+  private static stripeHazardYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b, // 亮黃色警示線/車位劃線
+    roughness: 0.35,
+    metalness: 0.1,
+  });
+
+  private static stripeWhiteMat = new THREE.MeshStandardMaterial({
+    color: 0xf1f5f9, // 純白地面劃線
+    roughness: 0.35,
+  });
+
+  private static wallIndOrangeMat = new THREE.MeshStandardMaterial({
+    color: 0xea580c, // 小型工廠活力橘 (Orange Factory Wall)
+    roughness: 0.65,
+    metalness: 0.08,
+  });
+
+  private static wallIndYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xca8a04, // 維修廠暖調工業黃 (Industrial Yellow Stucco)
+    roughness: 0.68,
+    metalness: 0.06,
+  });
+
+  private static wallIndPlinthDarkRedMat = new THREE.MeshStandardMaterial({
+    color: 0x7f1d1d, // 維修廠暗紅防撞基座水線
+    roughness: 0.75,
+    metalness: 0.1,
+  });
+
+  private static wallIndWarehouseRedMat = new THREE.MeshStandardMaterial({
+    color: 0xb91c1c, // 物流倉庫現代紅磚/陶土外牆
+    roughness: 0.72,
+    metalness: 0.05,
+  });
+
+  private static wallIndPylonYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b, // 物流倉庫亮黃色主立面門廊塔
+    roughness: 0.5,
+    metalness: 0.12,
+  });
+
+  private static wallIndFactoryRedMat = new THREE.MeshStandardMaterial({
+    color: 0x9f1239, // 中型工廠重工業深玫瑰暗紅外牆
+    roughness: 0.65,
+    metalness: 0.1,
+  });
+
+  private static wallIndBlueTowerMat = new THREE.MeshStandardMaterial({
+    color: 0x334155, // 藍灰工業技術控制塔樓
+    roughness: 0.55,
+    metalness: 0.25,
+  });
+
+  private static roofIndSlateDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x334155, // 經典浪板石板鐵皮斜屋頂
+    roughness: 0.42,
+    metalness: 0.28,
+  });
+
+  private static roofIndSkylightGlassMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8, // 採光天窗玻璃 (亮水藍半透光反光)
+    roughness: 0.1,
+    metalness: 0.8,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.35,
+    transparent: true,
+    opacity: 0.75,
+  });
+
+  private static roofIndHvacGreyMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8, // 屋頂排氣機組與空調冷卻器
+    roughness: 0.5,
+    metalness: 0.45,
+  });
+
+  private static steelBlueMat = new THREE.MeshStandardMaterial({
+    color: 0x2563eb, // 汽車舉升機立柱/鋼構藍
+    roughness: 0.35,
+    metalness: 0.5,
+  });
+
+  private static steelDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b, // 工業深黑鋼架與護欄
+    roughness: 0.4,
+    metalness: 0.6,
+  });
+
+  private static machineGreenMat = new THREE.MeshStandardMaterial({
+    color: 0x15803d, // 車床機台機械深綠
+    roughness: 0.55,
+    metalness: 0.2,
+  });
+
+  private static barrelBlueMat = new THREE.MeshStandardMaterial({
+    color: 0x0284c7, // 55加侖標準藍色機油桶
+    roughness: 0.4,
+    metalness: 0.3,
+  });
+
+  private static barrelRedMat = new THREE.MeshStandardMaterial({
+    color: 0xdc2626, // 紅色燃油桶/滅火器
+    roughness: 0.4,
+    metalness: 0.25,
+  });
+
+  private static barrelYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24, // 黃色化學防護桶
+    roughness: 0.4,
+    metalness: 0.2,
+  });
+
+  private static toolBoxRedMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444, // 紅色工具箱/千斤頂
+    roughness: 0.35,
+    metalness: 0.3,
+  });
+
+  private static pipeYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xeab308, // 亮黃色製程管線
+    roughness: 0.4,
+    metalness: 0.35,
+  });
+
+  private static pipeBlueMat = new THREE.MeshStandardMaterial({
+    color: 0x0ea5e9, // 高空藍色排氣風管
+    roughness: 0.4,
+    metalness: 0.25,
+  });
+
+  private static pipeSilverMat = new THREE.MeshStandardMaterial({
+    color: 0xd1d5db, // 銀色金屬穿線管
+    roughness: 0.25,
+    metalness: 0.85,
+  });
+
+  private static rollUpDoorMat = new THREE.MeshStandardMaterial({
+    color: 0x64748b, // 鐵捲門橫紋金屬波浪門片
+    roughness: 0.45,
+    metalness: 0.4,
+  });
+
+  private static cardboardMat = new THREE.MeshStandardMaterial({
+    color: 0xd97706, // 牛皮紙物流紙箱
+    roughness: 0.85,
+    metalness: 0.02,
+  });
+
+  private static woodPalletMat = new THREE.MeshStandardMaterial({
+    color: 0xb45309, // 實木物流托盤
+    roughness: 0.8,
+    metalness: 0.05,
+  });
+
+  private static trafficConeMat = new THREE.MeshStandardMaterial({
+    color: 0xf97316, // 亮橘色交通錐
+    roughness: 0.4,
+  });
+
+  private static concreteSmokestackMat = new THREE.MeshStandardMaterial({
+    color: 0xd1d5db, // 混凝土大型排煙煙囪
+    roughness: 0.85,
+    metalness: 0.08,
+  });
+
+  private static fenceIndustrialMat = new THREE.MeshStandardMaterial({
+    color: 0x64748b, // 廠區金屬護欄與菱形網
+    roughness: 0.5,
+    metalness: 0.5,
+  });
+
+  private static truckWhiteMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc, // 貨車白色車身/貨箱
+    roughness: 0.35,
+    metalness: 0.15,
+  });
+
+  private static truckYellowMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b, // 堆高機與貨車亮黃色外殼
+    roughness: 0.4,
+    metalness: 0.15,
+  });
+
+  private static tireRubberMat = new THREE.MeshStandardMaterial({
+    color: 0x18181b, // 黑色橡膠輪胎
+    roughness: 0.9,
+    metalness: 0.05,
   });
 
   // ==========================================
@@ -912,6 +1127,287 @@ export class BuildingModelFactory {
   }
 
   // ==========================================
+  // 工業區專屬模組與道具生成函式 (Industrial Props & Modules)
+  // ==========================================
+
+  /**
+   * 建立硬質混擬土廠區地坪
+   */
+  private static createBaseIndustrialYard(w: number, d: number): THREE.Group {
+    const yard = new THREE.Group();
+    const baseGeo = new THREE.BoxGeometry(w - 0.015, 0.025, d - 0.015);
+    const slab = new THREE.Mesh(baseGeo, this.concreteIndYardMat);
+    slab.position.y = 0.0125;
+    slab.receiveShadow = true;
+    yard.add(slab);
+
+    const curbGeo = new THREE.BoxGeometry(w, 0.008, d);
+    const curb = new THREE.Mesh(curbGeo, this.curbIndDarkMat);
+    curb.position.y = 0.004;
+    curb.receiveShadow = true;
+    yard.add(curb);
+    return yard;
+  }
+
+  /**
+   * 建立 55 加侖金屬油桶 (帶雙道環箍與注油孔)
+   */
+  private static createOilDrum(colorMat: THREE.Material = this.barrelBlueMat, r = 0.035, h = 0.09): THREE.Group {
+    const drum = new THREE.Group();
+    const bodyGeo = new THREE.CylinderGeometry(r, r, h, 14);
+    const body = new THREE.Mesh(bodyGeo, colorMat);
+    body.position.y = h / 2 + 0.025;
+    body.castShadow = true;
+    drum.add(body);
+
+    const ringGeo = new THREE.TorusGeometry(r + 0.002, 0.0025, 6, 14);
+    const r1 = new THREE.Mesh(ringGeo, this.steelDarkMat);
+    r1.rotation.x = Math.PI / 2;
+    r1.position.y = h * 0.35 + 0.025;
+    drum.add(r1);
+
+    const r2 = new THREE.Mesh(ringGeo, this.steelDarkMat);
+    r2.rotation.x = Math.PI / 2;
+    r2.position.y = h * 0.65 + 0.025;
+    drum.add(r2);
+    return drum;
+  }
+
+  /**
+   * 建立紙箱 (帶白色條碼標籤貼紙)
+   */
+  private static createCardboardBox(w = 0.08, h = 0.07, d = 0.08): THREE.Group {
+    const boxGroup = new THREE.Group();
+    const boxGeo = new THREE.BoxGeometry(w, h, d);
+    const box = new THREE.Mesh(boxGeo, this.cardboardMat);
+    box.position.y = h / 2;
+    box.castShadow = true;
+    boxGroup.add(box);
+
+    const labelGeo = new THREE.PlaneGeometry(w * 0.45, h * 0.35);
+    const label = new THREE.Mesh(labelGeo, this.stripeWhiteMat);
+    label.position.set(0, h * 0.5, d / 2 + 0.001);
+    boxGroup.add(label);
+    return boxGroup;
+  }
+
+  /**
+   * 建立實木棧板 (標準托盤)
+   */
+  private static createWoodPallet(w = 0.16, d = 0.16, h = 0.022): THREE.Group {
+    const pallet = new THREE.Group();
+    const plankCount = 4;
+    const plankW = (w - 0.01) / plankCount;
+    for (let i = 0; i < plankCount; i++) {
+      const pGeo = new THREE.BoxGeometry(plankW - 0.004, 0.005, d);
+      const p = new THREE.Mesh(pGeo, this.woodPalletMat);
+      p.position.set(-w / 2 + plankW * (i + 0.5), h - 0.0025, 0);
+      p.castShadow = true;
+      pallet.add(p);
+    }
+    for (let i = 0; i < 3; i++) {
+      const bGeo = new THREE.BoxGeometry(w, h - 0.005, 0.016);
+      const b = new THREE.Mesh(bGeo, this.woodPalletMat);
+      b.position.set(0, (h - 0.005) / 2, -d / 2 + (d / 2) * i);
+      b.castShadow = true;
+      pallet.add(b);
+    }
+    return pallet;
+  }
+
+  /**
+   * 建立反光交通安全錐
+   */
+  private static createTrafficCone(r = 0.022, h = 0.065): THREE.Group {
+    const cone = new THREE.Group();
+    const baseGeo = new THREE.BoxGeometry(r * 2.3, 0.006, r * 2.3);
+    const base = new THREE.Mesh(baseGeo, this.trafficConeMat);
+    base.position.y = 0.003 + 0.025;
+    cone.add(base);
+
+    const bodyGeo = new THREE.ConeGeometry(r, h, 10);
+    const body = new THREE.Mesh(bodyGeo, this.trafficConeMat);
+    body.position.y = h / 2 + 0.006 + 0.025;
+    body.castShadow = true;
+    cone.add(body);
+
+    const bandGeo = new THREE.CylinderGeometry(r * 0.55, r * 0.7, h * 0.22, 10);
+    const band = new THREE.Mesh(bandGeo, this.stripeWhiteMat);
+    band.position.y = h * 0.45 + 0.006 + 0.025;
+    cone.add(band);
+    return cone;
+  }
+
+  /**
+   * 建立金屬工業護欄
+   */
+  private static createIndustrialFence(length: number, height = 0.16): THREE.Group {
+    const fence = new THREE.Group();
+    const postGeo = new THREE.BoxGeometry(0.016, height, 0.016);
+    const railGeo = new THREE.BoxGeometry(length, 0.008, 0.008);
+
+    const postCount = Math.max(2, Math.round(length / 0.35) + 1);
+    for (let i = 0; i < postCount; i++) {
+      const post = new THREE.Mesh(postGeo, this.fenceIndustrialMat);
+      post.position.set(-length / 2 + (length / (postCount - 1)) * i, height / 2 + 0.025, 0);
+      post.castShadow = true;
+      fence.add(post);
+    }
+    const topRail = new THREE.Mesh(railGeo, this.fenceIndustrialMat);
+    topRail.position.set(0, height - 0.01 + 0.025, 0);
+    fence.add(topRail);
+
+    const midRail = new THREE.Mesh(railGeo, this.fenceIndustrialMat);
+    midRail.position.set(0, height * 0.5 + 0.025, 0);
+    fence.add(midRail);
+    return fence;
+  }
+
+  /**
+   * 建立工業變電器單元 (Transformer Unit)
+   */
+  private static createTransformerUnit(w = 0.16, h = 0.15, d = 0.14): THREE.Group {
+    const unit = new THREE.Group();
+    const bodyGeo = new THREE.BoxGeometry(w, h, d);
+    const body = new THREE.Mesh(bodyGeo, this.roofIndHvacGreyMat);
+    body.position.y = h / 2 + 0.025;
+    body.castShadow = true;
+    unit.add(body);
+
+    for (let dir of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        const finGeo = new THREE.BoxGeometry(0.004, h * 0.75, d * 0.15);
+        const fin = new THREE.Mesh(finGeo, this.curbIndDarkMat);
+        fin.position.set((w / 2 + 0.003) * dir, h * 0.5 + 0.025, -d * 0.3 + i * (d * 0.2));
+        unit.add(fin);
+      }
+    }
+    for (let i = -1; i <= 1; i++) {
+      const insGeo = new THREE.CylinderGeometry(0.008, 0.01, 0.035, 6);
+      const ins = new THREE.Mesh(insGeo, this.pipeYellowMat);
+      ins.position.set(i * (w * 0.25), h + 0.018 + 0.025, 0);
+      unit.add(ins);
+    }
+    return unit;
+  }
+
+  /**
+   * 建立精緻小貨車 (Mini Delivery Cargo Truck)
+   */
+  private static createMiniTruck(cabColor = 0xef4444, boxColor = 0xf8fafc): THREE.Group {
+    const truck = new THREE.Group();
+    const cabMat = new THREE.MeshStandardMaterial({ color: cabColor, roughness: 0.35 });
+    const boxMat = new THREE.MeshStandardMaterial({ color: boxColor, roughness: 0.4 });
+
+    const chassisGeo = new THREE.BoxGeometry(0.18, 0.03, 0.40);
+    const chassis = new THREE.Mesh(chassisGeo, this.steelDarkMat);
+    chassis.position.y = 0.045 + 0.025;
+    truck.add(chassis);
+
+    const tireGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.024, 10);
+    const wheelPositions = [
+      [-0.09, 0.03 + 0.025, 0.12],
+      [0.09, 0.03 + 0.025, 0.12],
+      [-0.09, 0.03 + 0.025, -0.12],
+      [0.09, 0.03 + 0.025, -0.12],
+    ];
+    wheelPositions.forEach(([x, y, z]) => {
+      const tire = new THREE.Mesh(tireGeo, this.tireRubberMat);
+      tire.rotation.z = Math.PI / 2;
+      tire.position.set(x, y, z);
+      truck.add(tire);
+    });
+
+    const cabGeo = new THREE.BoxGeometry(0.18, 0.11, 0.12);
+    const cab = new THREE.Mesh(cabGeo, cabMat);
+    cab.position.set(0, 0.115 + 0.025, 0.12);
+    cab.castShadow = true;
+    truck.add(cab);
+
+    const glassGeo = new THREE.BoxGeometry(0.16, 0.055, 0.005);
+    const glass = new THREE.Mesh(glassGeo, this.glassMat);
+    glass.position.set(0, 0.135 + 0.025, 0.182);
+    truck.add(glass);
+
+    const cargoGeo = new THREE.BoxGeometry(0.19, 0.15, 0.26);
+    const cargo = new THREE.Mesh(cargoGeo, boxMat);
+    cargo.position.set(0, 0.135 + 0.025, -0.07);
+    cargo.castShadow = true;
+    truck.add(cargo);
+    return truck;
+  }
+
+  /**
+   * 建立物流堆高機 (Industrial Forklift)
+   */
+  private static createForklift(colorMat: THREE.Material = this.truckYellowMat): THREE.Group {
+    const fl = new THREE.Group();
+
+    const bodyGeo = new THREE.BoxGeometry(0.13, 0.07, 0.16);
+    const body = new THREE.Mesh(bodyGeo, colorMat);
+    body.position.set(0, 0.055 + 0.025, -0.02);
+    body.castShadow = true;
+    fl.add(body);
+
+    const cageGeo = new THREE.BoxGeometry(0.11, 0.10, 0.10);
+    const cage = new THREE.Mesh(cageGeo, this.steelDarkMat);
+    cage.position.set(0, 0.13 + 0.025, -0.02);
+    cage.castShadow = true;
+    fl.add(cage);
+
+    const wheelGeo = new THREE.CylinderGeometry(0.024, 0.024, 0.02, 8);
+    [[-0.07, 0.024 + 0.025, 0.04], [0.07, 0.024 + 0.025, 0.04], [-0.07, 0.024 + 0.025, -0.06], [0.07, 0.024 + 0.025, -0.06]].forEach(([x, y, z]) => {
+      const w = new THREE.Mesh(wheelGeo, this.tireRubberMat);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(x, y, z);
+      fl.add(w);
+    });
+
+    const mastGeo = new THREE.BoxGeometry(0.10, 0.18, 0.015);
+    const mast = new THREE.Mesh(mastGeo, this.steelDarkMat);
+    mast.position.set(0, 0.10 + 0.025, 0.07);
+    fl.add(mast);
+
+    for (let dir of [-0.03, 0.03]) {
+      const forkGeo = new THREE.BoxGeometry(0.015, 0.005, 0.09);
+      const fork = new THREE.Mesh(forkGeo, this.steelDarkMat);
+      fork.position.set(dir, 0.015 + 0.025, 0.115);
+      fl.add(fork);
+    }
+    return fl;
+  }
+
+  /**
+   * 建立工業廠區路燈 (Industrial Yard Streetlight)
+   */
+  private static createIndustrialStreetlight(h = 0.38): THREE.Group {
+    const light = new THREE.Group();
+    const poleGeo = new THREE.CylinderGeometry(0.007, 0.009, h, 6);
+    const pole = new THREE.Mesh(poleGeo, this.curbIndDarkMat);
+    pole.position.y = h / 2 + 0.025;
+    pole.castShadow = true;
+    light.add(pole);
+
+    const armGeo = new THREE.BoxGeometry(0.006, 0.006, 0.06);
+    const arm = new THREE.Mesh(armGeo, this.curbIndDarkMat);
+    arm.position.set(0, h + 0.02, 0.025);
+    light.add(arm);
+
+    const headGeo = new THREE.BoxGeometry(0.022, 0.008, 0.03);
+    const head = new THREE.Mesh(headGeo, this.roofIndHvacGreyMat);
+    head.position.set(0, h + 0.016, 0.05);
+    light.add(head);
+
+    const bulbGeo = new THREE.PlaneGeometry(0.018, 0.024);
+    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+    const bulb = new THREE.Mesh(bulbGeo, bulbMat);
+    bulb.rotation.x = Math.PI / 2;
+    bulb.position.set(0, h + 0.011, 0.05);
+    light.add(bulb);
+    return light;
+  }
+
+  // ==========================================
   // 3. 5 款高品質純手工低密度住宅實例
   // ==========================================
 
@@ -1596,7 +2092,1002 @@ export class BuildingModelFactory {
   }
 
   // ==========================================
-  // 4. 元資料目錄與統一實例化介面
+  // 4. 4 款低密度工業區建築實例 (4x4, 5x5, 5x6, 6x6)
+  // ==========================================
+
+  /**
+   * 1. 4x4 小型工廠 (容納 3 人 / Small Factory)
+   * 佔地: 面寬 2.0m (4格) × 縱深 2.0m (4格)
+   * 參考附圖 1：開放式汽車維修與金屬加工工坊
+   * 核心特徵：
+   * - 橘色工廠主棟 (單坡斜鐵皮屋頂、黃框採光天窗、紅白條紋排煙煙囪、側樓木階梯)
+   * - 室外維修前庭 (地面油漬、雙柱藍色液壓汽車舉升機、拆卸輪胎、紅色千斤頂)
+   * - 金屬加工區 (機械綠車床工作台、深鋼色多層貨架擺放機油桶與五金零件箱、藍色55加侖油桶)
+   * - 廠區周邊灰色防護圍欄與前向敞開車道
+   * - 正面朝向：敞開維修庭院與舉升機入口面朝 +Z 軸 (道路方向)
+   */
+  public static createIndustrial_4x4(): THREE.Group {
+    const factory = new THREE.Group();
+    factory.name = 'Industrial_4x4';
+
+    // 1. 混擬土廠區地坪 (2.0m x 2.0m)
+    factory.add(this.createBaseIndustrialYard(2.0, 2.0));
+
+    // 地坪油漬污斑 (增加真實工坊氛圍)
+    const stains = [
+      { x: 0.25, z: 0.35, r: 0.12 },
+      { x: -0.15, z: 0.25, r: 0.08 },
+      { x: -0.35, z: -0.15, r: 0.09 },
+    ];
+    stains.forEach((s) => {
+      const geo = new THREE.CircleGeometry(s.r, 8);
+      const mesh = new THREE.Mesh(geo, this.concreteIndOilStainMat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(s.x, 0.026, s.z);
+      factory.add(mesh);
+    });
+
+    // 2. 橘色工坊主體建築 (位於後側偏右：X=0.28, Z=-0.50, W=1.15, D=0.82, H=0.62)
+    const bldW = 1.15;
+    const bldD = 0.82;
+    const bldH = 0.62;
+    const bldX = 0.28;
+    const bldZ = -0.50;
+
+    const bldGeo = new THREE.BoxGeometry(bldW, bldH, bldD);
+    const bld = new THREE.Mesh(bldGeo, this.wallIndOrangeMat);
+    bld.position.set(bldX, bldH / 2 + 0.025, bldZ);
+    bld.castShadow = true;
+    bld.receiveShadow = true;
+    factory.add(bld);
+
+    // 建築基座深色水線台度
+    const plinthGeo = new THREE.BoxGeometry(bldW + 0.02, 0.035, bldD + 0.02);
+    const plinth = new THREE.Mesh(plinthGeo, this.curbIndDarkMat);
+    plinth.position.set(bldX, 0.0175 + 0.025, bldZ);
+    factory.add(plinth);
+
+    // 單坡斜浪板屋頂 (從後往前往下微傾，帶突出金屬屋簷)
+    const roofW = bldW + 0.10;
+    const roofD = bldD + 0.12;
+    const roofH = 0.04;
+    const roofGeo = new THREE.BoxGeometry(roofW, roofH, roofD);
+    const roof = new THREE.Mesh(roofGeo, this.roofIndSlateDarkMat);
+    roof.position.set(bldX, bldH + 0.025 + 0.04, bldZ);
+    roof.rotation.x = -0.06;
+    roof.castShadow = true;
+    factory.add(roof);
+
+    // 屋頂突出的金屬波浪脊線
+    for (let i = -4; i <= 4; i++) {
+      const ribGeo = new THREE.BoxGeometry(0.014, 0.016, roofD - 0.02);
+      const rib = new THREE.Mesh(ribGeo, this.steelDarkMat);
+      rib.position.set(bldX + i * (roofW / 10), bldH + 0.025 + 0.065, bldZ);
+      rib.rotation.x = -0.06;
+      factory.add(rib);
+    }
+
+    // 磚造/彩條排煙煙囪 (後右側角頂部：紅白黃警示環節)
+    const chimH = 0.45;
+    const chimW = 0.11;
+    const chimGeo = new THREE.BoxGeometry(chimW, chimH, chimW);
+    const chim = new THREE.Mesh(chimGeo, this.wallWoodCedarMat);
+    chim.position.set(bldX + bldW / 2 - 0.08, bldH + chimH / 2 + 0.025, bldZ - bldD / 2 + 0.08);
+    chim.castShadow = true;
+    factory.add(chim);
+
+    for (let c = 0; c < 3; c++) {
+      const stripeGeo = new THREE.BoxGeometry(chimW + 0.004, 0.04, chimW + 0.004);
+      const stripeMat = c % 2 === 0 ? this.stripeHazardYellowMat : this.wallWoodDarkMat;
+      const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+      stripe.position.set(bldX + bldW / 2 - 0.08, bldH + 0.12 + c * 0.09 + 0.025, bldZ - bldD / 2 + 0.08);
+      factory.add(stripe);
+    }
+
+    // 3. 工坊正面門窗與外牆設備 (Z = bldZ + bldD/2 = -0.09)
+    const frontWallZ = bldZ + bldD / 2 + 0.002;
+
+    const win1 = this.createWindow(0.32, 0.16, { style: 'dark', panesX: 2, panesY: 1, sill: true });
+    win1.position.set(bldX - 0.22, 0.42 + 0.025, frontWallZ);
+    factory.add(win1);
+
+    const win2 = this.createWindow(0.32, 0.16, { style: 'dark', panesX: 2, panesY: 1, sill: true });
+    win2.position.set(bldX + 0.22, 0.42 + 0.025, frontWallZ);
+    factory.add(win2);
+
+    const shopDoor = this.createFrontDoor(0.12, 0.22, { doorMat: this.doorDarkMat, frameMat: this.frameDarkMat });
+    shopDoor.position.set(bldX + 0.22, 0.025, frontWallZ);
+    factory.add(shopDoor);
+
+    const sideDoor = this.createFrontDoor(0.11, 0.20, { doorMat: this.doorWoodMat, frameMat: this.frameWhiteMat });
+    sideDoor.rotation.y = Math.PI / 2;
+    sideDoor.position.set(bldX + bldW / 2 + 0.002, 0.10 + 0.025, bldZ + 0.15);
+    factory.add(sideDoor);
+
+    for (let st = 0; st < 3; st++) {
+      const stepGeo = new THREE.BoxGeometry(0.12, 0.035, 0.14 - st * 0.03);
+      const step = new THREE.Mesh(stepGeo, this.wallWoodCedarMat);
+      step.position.set(bldX + bldW / 2 + 0.06 + st * 0.04, 0.035 * (3 - st) + 0.005, bldZ + 0.15);
+      factory.add(step);
+    }
+
+    const extGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.045, 8);
+    const ext = new THREE.Mesh(extGeo, this.barrelRedMat);
+    ext.position.set(bldX + 0.38, 0.24 + 0.025, frontWallZ + 0.015);
+    factory.add(ext);
+
+    const tableGeo = new THREE.BoxGeometry(0.34, 0.12, 0.16);
+    const table = new THREE.Mesh(tableGeo, this.wallIndOrangeMat);
+    table.position.set(bldX - 0.22, 0.06 + 0.025, frontWallZ + 0.10);
+    table.castShadow = true;
+    factory.add(table);
+
+    const toolboxGeo = new THREE.BoxGeometry(0.10, 0.05, 0.06);
+    const toolbox = new THREE.Mesh(toolboxGeo, this.toolBoxRedMat);
+    toolbox.position.set(bldX - 0.20, 0.145 + 0.025, frontWallZ + 0.10);
+    factory.add(toolbox);
+
+    // 4. 左側戶外金屬加工機具區
+    const latheGroup = new THREE.Group();
+    latheGroup.position.set(-0.62, 0.025, -0.45);
+
+    const latheBase = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.22, 0.18), this.machineGreenMat);
+    latheBase.position.y = 0.11;
+    latheBase.castShadow = true;
+    latheGroup.add(latheBase);
+
+    const latheTop = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.12, 0.14), this.machineGreenMat);
+    latheTop.position.set(0, 0.27, -0.02);
+    latheGroup.add(latheTop);
+
+    const chuck = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 8), this.pipeSilverMat);
+    chuck.rotation.z = Math.PI / 2;
+    chuck.position.set(-0.12, 0.28, 0.03);
+    latheGroup.add(chuck);
+
+    factory.add(latheGroup);
+
+    const shelfGroup = new THREE.Group();
+    shelfGroup.position.set(-0.16, 0.025, -0.55);
+    const shelfH = 0.44;
+    const shelfW = 0.32;
+    const shelfD = 0.14;
+
+    for (let sx of [-shelfW / 2, shelfW / 2]) {
+      for (let sz of [-shelfD / 2, shelfD / 2]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.012, shelfH, 0.012), this.steelDarkMat);
+        post.position.set(sx, shelfH / 2, sz);
+        shelfGroup.add(post);
+      }
+    }
+    for (let l = 1; l <= 3; l++) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(shelfW, 0.01, shelfD), this.steelDarkMat);
+      plank.position.y = (shelfH / 3) * l;
+      shelfGroup.add(plank);
+
+      if (l === 2) {
+        const box1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.06), this.stripeHazardYellowMat);
+        box1.position.set(-0.06, (shelfH / 3) * l + 0.03, 0);
+        shelfGroup.add(box1);
+
+        const box2 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, 0.05), this.steelBlueMat);
+        box2.position.set(0.06, (shelfH / 3) * l + 0.025, 0);
+        shelfGroup.add(box2);
+      } else if (l === 1) {
+        const t = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.025, 10), this.tireRubberMat);
+        t.rotation.z = Math.PI / 2;
+        t.position.set(0, (shelfH / 3) * l + 0.035, 0);
+        shelfGroup.add(t);
+      }
+    }
+    factory.add(shelfGroup);
+
+    const drum1 = this.createOilDrum(this.barrelBlueMat);
+    drum1.position.set(-0.35, 0, -0.42);
+    factory.add(drum1);
+
+    // 5. 前方雙柱汽車舉升機 (Hydraulic Two-Post Car Lift)
+    const liftGroup = new THREE.Group();
+    liftGroup.position.set(0.30, 0.025, 0.42);
+
+    const postH = 0.48;
+    const postDist = 0.52;
+    for (let px of [-postDist / 2, postDist / 2]) {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.035, postH, 0.035), this.steelBlueMat);
+      p.position.set(px, postH / 2, 0);
+      p.castShadow = true;
+      liftGroup.add(p);
+
+      const pBase = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.07), this.steelDarkMat);
+      pBase.position.set(px, 0.006, 0);
+      liftGroup.add(pBase);
+    }
+
+    for (let px of [-0.14, 0.14]) {
+      const railGeo = new THREE.BoxGeometry(0.08, 0.02, 0.52);
+      const rail = new THREE.Mesh(railGeo, this.steelDarkMat);
+      rail.position.set(px, 0.07, 0);
+      liftGroup.add(rail);
+
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.015, 0.10), this.steelBlueMat);
+      pad.position.set(px, 0.085, 0);
+      liftGroup.add(pad);
+
+      const rampGeo = new THREE.BoxGeometry(0.08, 0.015, 0.12);
+      const ramp = new THREE.Mesh(rampGeo, this.steelDarkMat);
+      ramp.position.set(px, 0.035, 0.30);
+      ramp.rotation.x = 0.35;
+      liftGroup.add(ramp);
+    }
+
+    const liftTire = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.028, 12), this.tireRubberMat);
+    liftTire.position.set(-0.14, 0.095, -0.05);
+    liftGroup.add(liftTire);
+
+    factory.add(liftGroup);
+
+    const jackGroup = new THREE.Group();
+    jackGroup.position.set(-0.15, 0.025, 0.52);
+    const jackBody = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.12), this.toolBoxRedMat);
+    jackBody.position.y = 0.015;
+    jackGroup.add(jackBody);
+    const jackHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.10, 6), this.steelDarkMat);
+    jackHandle.rotation.x = -0.55;
+    jackHandle.position.set(0, 0.06, -0.04);
+    jackGroup.add(jackHandle);
+    factory.add(jackGroup);
+
+    const drumRed = this.createOilDrum(this.barrelRedMat);
+    drumRed.position.set(0.78, 0, 0.28);
+    factory.add(drumRed);
+
+    const drumYellow = this.createOilDrum(this.barrelYellowMat);
+    drumYellow.position.set(0.78, 0, 0.44);
+    factory.add(drumYellow);
+
+    // 6. 圍籬保護 (後方與左側邊界)
+    const rearFence = this.createIndustrialFence(1.85, 0.18);
+    rearFence.position.set(0, 0, -0.96);
+    factory.add(rearFence);
+
+    const leftFence = this.createIndustrialFence(1.85, 0.18);
+    leftFence.rotation.y = Math.PI / 2;
+    leftFence.position.set(-0.96, 0, 0);
+    factory.add(leftFence);
+
+    const rightFence = this.createIndustrialFence(0.70, 0.18);
+    rightFence.rotation.y = Math.PI / 2;
+    rightFence.position.set(0.96, 0, 0.55);
+    factory.add(rightFence);
+
+    return factory;
+  }
+
+  /**
+   * 2. 5x5 維修廠 (容納 4 人 / Repair Shop)
+   * 佔地: 面寬 2.5m (5格) × 縱深 2.5m (5格)
+   * 參考附圖 2：現代工業黃色重型維修保養中心
+   * 核心特徵：
+   * - 暖調工業黃色主建築棟、暗紅基座線腳與黑色天台防墜金屬圍欄
+   * - 大型金屬鐵捲門 (Roll-up door) 與旁邊高架輸送帶斜坡開口 (Elevated conveyor ramp bay)
+   * - 屋頂標誌性斜切玻璃採光溫室天窗 (Angled glass skylight) 與屋頂空調機組
+   * - 藍色巨型排氣抽風管由屋頂彎入側邊機電單元、外牆配電盤與指示燈
+   * - 右側多層方形控制瞭望塔樓 (Control tower)
+   * - 正面前庭堆放深灰色工業貨箱棧群與橘色交通安全警示錐
+   * - 正面朝向：鐵捲門、輸送坡道與貨箱前庭朝向 +Z 軸 (道路方向)
+   */
+  public static createIndustrial_5x5(): THREE.Group {
+    const shop = new THREE.Group();
+    shop.name = 'Industrial_5x5';
+
+    // 1. 混擬土廠區地坪 (2.5m x 2.5m)
+    shop.add(this.createBaseIndustrialYard(2.5, 2.5));
+
+    // 2. 主維修車間廠房 (W=1.30, D=1.30, H=0.68)
+    const hallW = 1.30;
+    const hallD = 1.30;
+    const hallH = 0.68;
+    const hallX = 0.0;
+    const hallZ = -0.40;
+
+    const hallGeo = new THREE.BoxGeometry(hallW, hallH, hallD);
+    const hall = new THREE.Mesh(hallGeo, this.wallIndYellowMat);
+    hall.position.set(hallX, hallH / 2 + 0.025, hallZ);
+    hall.castShadow = true;
+    hall.receiveShadow = true;
+    shop.add(hall);
+
+    // 暗紅色基座防撞水線
+    const plinthGeo = new THREE.BoxGeometry(hallW + 0.02, 0.045, hallD + 0.02);
+    const plinth = new THREE.Mesh(plinthGeo, this.wallIndPlinthDarkRedMat);
+    plinth.position.set(hallX, 0.0225 + 0.025, hallZ);
+    shop.add(plinth);
+
+    // 屋頂黑色金屬護欄
+    const railX1 = this.createIndustrialFence(hallW - 0.04, 0.08);
+    railX1.position.set(hallX, hallH, hallZ + hallD / 2 - 0.02);
+    shop.add(railX1);
+
+    const railX2 = this.createIndustrialFence(hallW - 0.04, 0.08);
+    railX2.position.set(hallX, hallH, hallZ - hallD / 2 + 0.02);
+    shop.add(railX2);
+
+    const railZ1 = this.createIndustrialFence(hallD - 0.04, 0.08);
+    railZ1.rotation.y = Math.PI / 2;
+    railZ1.position.set(hallX - hallW / 2 + 0.02, hallH, hallZ);
+    shop.add(railZ1);
+
+    // 3. 標誌性斜切採光天窗 (Angled Glass Skylight Greenhouse Roof)
+    const skyGroup = new THREE.Group();
+    skyGroup.position.set(-0.15, hallH + 0.025, hallZ);
+
+    const skyW = 0.52;
+    const skyD = 0.85;
+    const skyH = 0.42;
+
+    const skyShape = new THREE.Shape();
+    skyShape.moveTo(-skyD / 2, 0);
+    skyShape.lineTo(skyD / 2, 0);
+    skyShape.lineTo(-skyD / 2, skyH);
+    skyShape.closePath();
+
+    const extrudeSettings = { depth: skyW, bevelEnabled: false };
+    const skyGeo = new THREE.ExtrudeGeometry(skyShape, extrudeSettings);
+    skyGeo.center();
+    const skyMesh = new THREE.Mesh(skyGeo, this.roofIndSkylightGlassMat);
+    skyMesh.rotation.y = -Math.PI / 2;
+    skyMesh.position.y = skyH / 2;
+    skyMesh.castShadow = true;
+    skyGroup.add(skyMesh);
+
+    for (let g = 0; g <= 5; g++) {
+      const ribGeo = new THREE.BoxGeometry(skyW + 0.01, 0.01, 0.01);
+      const rib = new THREE.Mesh(ribGeo, this.steelDarkMat);
+      const tz = -skyD / 2 + (skyD / 5) * g;
+      const ty = (1 - g / 5) * skyH;
+      rib.position.set(0, ty, tz);
+      skyGroup.add(rib);
+    }
+    shop.add(skyGroup);
+
+    // 4. 正立面設施 (Z = hallZ + hallD/2 = 0.25)
+    const frontZ = hallZ + hallD / 2 + 0.002;
+
+    // (A) 大型金屬捲門
+    const doorGroup = new THREE.Group();
+    doorGroup.position.set(0.35, 0.025, frontZ);
+    const doorMesh = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.50, 0.015), this.rollUpDoorMat);
+    doorMesh.position.y = 0.25;
+    doorGroup.add(doorMesh);
+
+    const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(0.51, 0.52, 0.02), this.steelDarkMat);
+    doorFrame.position.y = 0.26;
+    doorGroup.add(doorFrame);
+    shop.add(doorGroup);
+
+    // (B) 左側輸送斜坡穿牆通道
+    const bayGroup = new THREE.Group();
+    bayGroup.position.set(-0.34, 0.025, frontZ);
+
+    const holeGeo = new THREE.BoxGeometry(0.46, 0.40, 0.02);
+    const hole = new THREE.Mesh(holeGeo, this.steelDarkMat);
+    hole.position.y = 0.20;
+    bayGroup.add(hole);
+
+    const rampW = 0.44;
+    const rampL = 0.60;
+    const rampH = 0.12;
+    const rampGeo = new THREE.BoxGeometry(rampW, rampH, rampL);
+    const ramp = new THREE.Mesh(rampGeo, this.curbIndDarkMat);
+    ramp.position.set(0, rampH / 2, rampL / 2);
+    bayGroup.add(ramp);
+
+    const beltGeo = new THREE.BoxGeometry(rampW * 0.75, 0.01, rampL);
+    const belt = new THREE.Mesh(beltGeo, this.steelDarkMat);
+    belt.position.set(0, rampH + 0.005, rampL / 2);
+    bayGroup.add(belt);
+
+    for (let lx of [-rampW / 2 - 0.04, rampW / 2 + 0.04]) {
+      const lampGeo = new THREE.BoxGeometry(0.025, 0.045, 0.02);
+      const lampMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+      const lamp = new THREE.Mesh(lampGeo, lampMat);
+      lamp.position.set(lx, 0.22, 0.01);
+      bayGroup.add(lamp);
+    }
+    shop.add(bayGroup);
+
+    // (C) 中間立面電氣控制箱與信號燈
+    const panelBox = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.15, 0.03), this.roofIndHvacGreyMat);
+    panelBox.position.set(0.02, 0.38 + 0.025, frontZ + 0.015);
+    shop.add(panelBox);
+
+    const greenLed = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 8), new THREE.MeshBasicMaterial({ color: 0x22c55e }));
+    greenLed.position.set(0.04, 0.35 + 0.025, frontZ + 0.032);
+    shop.add(greenLed);
+
+    const redLed = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 8), new THREE.MeshBasicMaterial({ color: 0xef4444 }));
+    redLed.position.set(0.04, 0.41 + 0.025, frontZ + 0.032);
+    shop.add(redLed);
+
+    const conduit = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.01, 0.01), this.pipeSilverMat);
+    conduit.position.set(-0.10, 0.44 + 0.025, frontZ + 0.015);
+    shop.add(conduit);
+
+    // 5. 左側機電通風機房與藍色巨型彎管 (HVAC Extraction Duct)
+    const mechW = 0.35;
+    const mechD = 0.65;
+    const mechH = 0.55;
+    const mechGeo = new THREE.BoxGeometry(mechW, mechH, mechD);
+    const mechBox = new THREE.Mesh(mechGeo, this.roofIndHvacGreyMat);
+    mechBox.position.set(-hallW / 2 - mechW / 2 + 0.02, mechH / 2 + 0.025, hallZ - 0.15);
+    mechBox.castShadow = true;
+    shop.add(mechBox);
+
+    const ductR = 0.04;
+    const ductGroup = new THREE.Group();
+    ductGroup.position.set(-hallW / 2 - 0.04, hallH + 0.025, hallZ - 0.15);
+
+    const vDuct = new THREE.Mesh(new THREE.CylinderGeometry(ductR, ductR, 0.22, 12), this.pipeBlueMat);
+    vDuct.position.set(0, 0.11, 0);
+    ductGroup.add(vDuct);
+
+    const elbow = new THREE.Mesh(new THREE.TorusGeometry(0.08, ductR, 8, 12, Math.PI / 2), this.pipeBlueMat);
+    elbow.rotation.y = Math.PI / 2;
+    elbow.position.set(-0.08, 0.22, 0);
+    ductGroup.add(elbow);
+
+    const hDuct = new THREE.Mesh(new THREE.CylinderGeometry(ductR, ductR, 0.14, 12), this.pipeBlueMat);
+    hDuct.rotation.z = Math.PI / 2;
+    hDuct.position.set(-0.08, 0.30, 0);
+    ductGroup.add(hDuct);
+    shop.add(ductGroup);
+
+    // 6. 右側方形瞭望控制塔樓 (Observation / Control Tower)
+    const towerW = 0.48;
+    const towerD = 0.48;
+    const towerH = 1.10;
+    const towerX = hallX + hallW / 2 + towerW / 2 - 0.04;
+    const towerZ = hallZ - 0.15;
+
+    const towerGeo = new THREE.BoxGeometry(towerW, towerH, towerD);
+    const tower = new THREE.Mesh(towerGeo, this.wallIndYellowMat);
+    tower.position.set(towerX, towerH / 2 + 0.025, towerZ);
+    tower.castShadow = true;
+    shop.add(tower);
+
+    const towerPlinth = new THREE.Mesh(new THREE.BoxGeometry(towerW + 0.02, 0.045, towerD + 0.02), this.wallIndPlinthDarkRedMat);
+    towerPlinth.position.set(towerX, 0.0225 + 0.025, towerZ);
+    shop.add(towerPlinth);
+
+    const towerRoof = this.createFlatParapetRoof(towerW + 0.04, towerD + 0.04, this.wallIndYellowMat, this.steelDarkMat);
+    towerRoof.position.set(towerX, towerH + 0.025, towerZ);
+    shop.add(towerRoof);
+
+    const towerWin = this.createWindow(0.18, 0.22, { style: 'dark', panesX: 1, panesY: 2 });
+    towerWin.position.set(towerX, towerH * 0.72 + 0.025, towerZ + towerD / 2 + 0.002);
+    shop.add(towerWin);
+
+    const towerDoor = this.createFrontDoor(0.11, 0.20, { doorMat: this.doorDarkMat, frameMat: this.frameDarkMat });
+    towerDoor.position.set(towerX, 0.025, towerZ + towerD / 2 + 0.002);
+    shop.add(towerDoor);
+
+    // 7. 前庭工業深灰貨箱棧與交通錐
+    const crateGroup = new THREE.Group();
+    crateGroup.position.set(0.0, 0.025, 0.65);
+
+    const crateSizes = [
+      { x: -0.12, y: 0.06, z: 0.0, w: 0.16, h: 0.12, d: 0.16 },
+      { x: 0.06, y: 0.06, z: 0.0, w: 0.16, h: 0.12, d: 0.16 },
+      { x: -0.12, y: 0.17, z: 0.0, w: 0.15, h: 0.10, d: 0.15 },
+      { x: 0.22, y: 0.05, z: 0.08, w: 0.14, h: 0.10, d: 0.14 },
+      { x: -0.28, y: 0.05, z: 0.12, w: 0.14, h: 0.10, d: 0.14 },
+      { x: -0.05, y: 0.05, z: 0.22, w: 0.15, h: 0.10, d: 0.15 },
+      { x: 0.12, y: 0.05, z: 0.24, w: 0.14, h: 0.10, d: 0.14 },
+    ];
+    crateSizes.forEach((c) => {
+      const crGeo = new THREE.BoxGeometry(c.w, c.h, c.d);
+      const cr = new THREE.Mesh(crGeo, this.steelDarkMat);
+      cr.position.set(c.x, c.y, c.z);
+      cr.castShadow = true;
+      crateGroup.add(cr);
+    });
+
+    const cone1 = this.createTrafficCone();
+    cone1.position.set(-0.35, 0, 0.25);
+    crateGroup.add(cone1);
+
+    const cone2 = this.createTrafficCone();
+    cone2.position.set(0.30, 0, 0.28);
+    crateGroup.add(cone2);
+
+    shop.add(crateGroup);
+
+    return shop;
+  }
+
+  /**
+   * 3. 5x6 物流倉庫 (容納 4 人 / Logistics Warehouse)
+   * 佔地: 面寬 2.5m (5格，貼合馬路邊) × 縱深 3.0m (6格)
+   * 參考附圖 3：三泊位現代物流配送倉儲轉運中心
+   * 核心特徵：
+   * - 現代紅磚/陶土外牆、左立面鮮黃門廊飾牆與頂部 "WAREHOUSE" 亮黃立體招牌
+   * - 3 座貨櫃裝卸泊位 (Dock 1, 2, 3)：
+   *   * 1 號碼頭泊位：全包覆氣密防撞罩，停靠對接白色大型長途貨櫃聯結車
+   *   * 2 號碼頭泊位：黃色防撞升降板與斜向斑馬警示線
+   *   * 3 號碼頭泊位：開放式裝卸踏台與側向貨運捲門
+   * - 轉運貨場停靠黃色中型配送廂型貨車、黃色工業堆高機正在裝卸木棧板紙箱
+   * - 入口處設有白色守衛室警衛亭 (Security Booth) 與紅白相間升降道閘桿
+   * - 屋頂配備整齊排列之工業空調通風風機陣列
+   * - 正面朝向：面寬 2.5m (5格) 貼合馬路，大門與貨運泊位前庭朝向 +Z 軸
+   */
+  public static createIndustrial_5x6(): THREE.Group {
+    const warehouse = new THREE.Group();
+    warehouse.name = 'Industrial_5x6';
+
+    // 1. 瀝青與混擬土大型物流地坪 (面寬 2.5m x 縱深 3.0m)
+    warehouse.add(this.createBaseIndustrialYard(2.5, 3.0));
+
+    // 2. 主倉儲建築 (W=2.20, D=1.30, H=0.92)
+    const whW = 2.20;
+    const whD = 1.30;
+    const whH = 0.92;
+    const whX = 0.05;
+    const whZ = -0.80;
+
+    const whGeo = new THREE.BoxGeometry(whW, whH, whD);
+    const whMesh = new THREE.Mesh(whGeo, this.wallIndWarehouseRedMat);
+    whMesh.position.set(whX, whH / 2 + 0.025, whZ);
+    whMesh.castShadow = true;
+    whMesh.receiveShadow = true;
+    warehouse.add(whMesh);
+
+    const plinthGeo = new THREE.BoxGeometry(whW + 0.02, 0.045, whD + 0.02);
+    const plinth = new THREE.Mesh(plinthGeo, this.curbIndDarkMat);
+    plinth.position.set(whX, 0.0225 + 0.025, whZ);
+    warehouse.add(plinth);
+
+    // 左立面鮮黃色標誌性門廊飾牆 (Yellow Accent Pylon)
+    const pylonW = 0.24;
+    const pylonH = 1.12;
+    const pylonD = whD + 0.06;
+    const pylonX = whX - whW / 2 + pylonW / 2;
+    const pylonGeo = new THREE.BoxGeometry(pylonW, pylonH, pylonD);
+    const pylon = new THREE.Mesh(pylonGeo, this.wallIndPylonYellowMat);
+    pylon.position.set(pylonX, pylonH / 2 + 0.025, whZ);
+    pylon.castShadow = true;
+    warehouse.add(pylon);
+
+    const parapet = this.createFlatParapetRoof(whW, whD, this.wallIndWarehouseRedMat, this.steelDarkMat);
+    parapet.position.set(whX, whH + 0.025, whZ);
+    warehouse.add(parapet);
+
+    // 屋頂整齊排列之空調排風機冷卻塔 (AHU Matrix)
+    for (let rx = -2; rx <= 2; rx++) {
+      for (let rz = -1; rz <= 1; rz++) {
+        const ahuGeo = new THREE.BoxGeometry(0.12, 0.06, 0.10);
+        const ahu = new THREE.Mesh(ahuGeo, this.roofIndHvacGreyMat);
+        ahu.position.set(whX + 0.15 + rx * 0.28, whH + 0.055 + 0.025, whZ + rz * 0.32);
+        ahu.castShadow = true;
+        warehouse.add(ahu);
+      }
+    }
+
+    // 3. 正面屋頂 "WAREHOUSE" 亮黃色立體大招牌 (Signboard)
+    const signGroup = new THREE.Group();
+    signGroup.position.set(whX + 0.20, whH + 0.10 + 0.025, whZ + whD / 2 + 0.02);
+
+    const signBoardGeo = new THREE.BoxGeometry(0.85, 0.18, 0.03);
+    const signBoard = new THREE.Mesh(signBoardGeo, this.wallIndPylonYellowMat);
+    signGroup.add(signBoard);
+
+    const signTextGeo = new THREE.BoxGeometry(0.75, 0.10, 0.015);
+    const signText = new THREE.Mesh(signTextGeo, this.steelDarkMat);
+    signText.position.z = 0.02;
+    signGroup.add(signText);
+
+    for (let lx of [-0.35, 0, 0.35]) {
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.03), this.curbIndDarkMat);
+      lamp.position.set(lx, 0.12, 0.03);
+      signGroup.add(lamp);
+    }
+    warehouse.add(signGroup);
+
+    // 4. 三座裝卸碼頭泊位 (Dock Bays 1, 2, 3 Facing +Z)
+    const dockZ = whZ + whD / 2 + 0.002;
+
+    // (A) 1 號碼頭泊位：對接白色大型長途貨櫃車
+    const dock1Group = new THREE.Group();
+    dock1Group.position.set(-0.35, 0.025, dockZ);
+
+    const shelterMesh = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.44, 0.08), this.steelDarkMat);
+    shelterMesh.position.set(0, 0.22, 0.04);
+    dock1Group.add(shelterMesh);
+
+    const d1Door = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.38, 0.01), this.rollUpDoorMat);
+    d1Door.position.set(0, 0.20, 0.01);
+    dock1Group.add(d1Door);
+
+    const num1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.01), this.wallIndPylonYellowMat);
+    num1.position.set(0, 0.46, 0.08);
+    dock1Group.add(num1);
+
+    const semiTruck = this.createMiniTruck(0xef4444, 0xf8fafc);
+    semiTruck.scale.set(1.15, 1.15, 1.35);
+    semiTruck.position.set(0, 0, 0.55);
+    dock1Group.add(semiTruck);
+
+    warehouse.add(dock1Group);
+
+    // (B) 2 號碼頭泊位：配備黃色升降板與安全斑馬線
+    const dock2Group = new THREE.Group();
+    dock2Group.position.set(0.25, 0.025, dockZ);
+
+    const d2Door = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.40, 0.015), this.rollUpDoorMat);
+    d2Door.position.set(0, 0.20, 0.01);
+    dock2Group.add(d2Door);
+
+    const d2Frame = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.44, 0.04), this.steelDarkMat);
+    d2Frame.position.set(0, 0.22, 0.02);
+    dock2Group.add(d2Frame);
+
+    const leveller = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 0.16), this.stripeHazardYellowMat);
+    leveller.position.set(0, 0.015, 0.08);
+    dock2Group.add(leveller);
+
+    const num2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.01), this.wallIndPylonYellowMat);
+    num2.position.set(0, 0.46, 0.04);
+    dock2Group.add(num2);
+
+    warehouse.add(dock2Group);
+
+    // (C) 3 號碼頭泊位：半開捲門與水泥階梯
+    const dock3Group = new THREE.Group();
+    dock3Group.position.set(0.80, 0.025, dockZ);
+
+    const d3Door = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.25, 0.015), this.rollUpDoorMat);
+    d3Door.position.set(0, 0.27, 0.01);
+    dock3Group.add(d3Door);
+
+    const d3Frame = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.44, 0.04), this.steelDarkMat);
+    d3Frame.position.set(0, 0.22, 0.02);
+    dock3Group.add(d3Frame);
+
+    const stepPlat = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.08, 0.18), this.concreteIndYardMat);
+    stepPlat.position.set(0, 0.04, 0.09);
+    dock3Group.add(stepPlat);
+
+    const num3 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.01), this.wallIndPylonYellowMat);
+    num3.position.set(0, 0.46, 0.04);
+    dock3Group.add(num3);
+
+    warehouse.add(dock3Group);
+
+    // 5. 倉儲前庭物流設施 (Z in [0.20, 1.45])
+    const forklift = this.createForklift();
+    forklift.position.set(-0.75, 0, 0.35);
+    forklift.rotation.y = 0.35;
+    warehouse.add(forklift);
+
+    const flPallet = this.createWoodPallet();
+    flPallet.position.set(-0.70, 0.025, 0.52);
+    warehouse.add(flPallet);
+
+    const flBox = this.createCardboardBox(0.10, 0.08, 0.10);
+    flBox.position.set(-0.70, 0.047 + 0.025, 0.52);
+    warehouse.add(flBox);
+
+    const yellowVan = this.createMiniTruck(0xf59e0b, 0xf1f5f9);
+    yellowVan.position.set(0.20, 0, 0.85);
+    yellowVan.rotation.y = -0.15;
+    warehouse.add(yellowVan);
+
+    for (let px of [0.65, 0.85]) {
+      const pallet = this.createWoodPallet();
+      pallet.position.set(px, 0.025, 0.55);
+      warehouse.add(pallet);
+
+      const box = this.createCardboardBox(0.12, 0.09, 0.12);
+      box.position.set(px, 0.047 + 0.025, 0.55);
+      warehouse.add(box);
+    }
+
+    const drumR = this.createOilDrum(this.barrelRedMat);
+    drumR.position.set(0.68, 0, 0.78);
+    warehouse.add(drumR);
+
+    const drumY = this.createOilDrum(this.barrelYellowMat);
+    drumY.position.set(0.82, 0, 0.78);
+    warehouse.add(drumY);
+
+    // 警衛亭與自動升降道閘
+    const guardGroup = new THREE.Group();
+    guardGroup.position.set(-0.95, 0.025, 1.15);
+
+    const boothW = 0.26;
+    const boothD = 0.26;
+    const boothH = 0.38;
+    const boothGeo = new THREE.BoxGeometry(boothW, boothH, boothD);
+    const booth = new THREE.Mesh(boothGeo, this.truckWhiteMat);
+    booth.position.y = boothH / 2;
+    booth.castShadow = true;
+    guardGroup.add(booth);
+
+    const bRoof = new THREE.Mesh(new THREE.BoxGeometry(boothW + 0.06, 0.03, boothD + 0.06), this.curbIndDarkMat);
+    bRoof.position.y = boothH + 0.015;
+    guardGroup.add(bRoof);
+
+    const bWin = new THREE.Mesh(new THREE.BoxGeometry(boothW * 0.75, 0.12, 0.01), this.glassMat);
+    bWin.position.set(0, boothH * 0.65, boothD / 2 + 0.002);
+    guardGroup.add(bWin);
+
+    const gatePost = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.04), this.wallIndOrangeMat);
+    gatePost.position.set(0.20, 0.08, 0.0);
+    guardGroup.add(gatePost);
+
+    const boomArm = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.02, 0.02), this.stripeWhiteMat);
+    boomArm.position.set(0.44, 0.14, 0.0);
+    guardGroup.add(boomArm);
+
+    for (let s = 0; s < 3; s++) {
+      const redBand = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.022, 0.022), this.barrelRedMat);
+      redBand.position.set(0.30 + s * 0.12, 0.14, 0.0);
+      guardGroup.add(redBand);
+    }
+    warehouse.add(guardGroup);
+
+    // 6. 園區四周防護圍籬與修剪方塊綠籬
+    const fenceR = this.createIndustrialFence(2.8, 0.20);
+    fenceR.rotation.y = Math.PI / 2;
+    fenceR.position.set(1.22, 0, 0);
+    warehouse.add(fenceR);
+
+    const fenceRear = this.createIndustrialFence(2.4, 0.20);
+    fenceRear.position.set(0, 0, -1.46);
+    warehouse.add(fenceRear);
+
+    const fenceL = this.createIndustrialFence(1.8, 0.20);
+    fenceL.rotation.y = Math.PI / 2;
+    fenceL.position.set(-1.22, 0, -0.50);
+    warehouse.add(fenceL);
+
+    for (let bz of [-1.2, -0.6, 0.0, 0.6]) {
+      const bush = this.createHedge(0.12, 0.18, 0.12);
+      bush.position.set(1.15, 0.09 + 0.025, bz);
+      warehouse.add(bush);
+    }
+
+    return warehouse;
+  }
+
+  /**
+   * 4. 6x6 中型工廠 (容納 7 人 / Medium Heavy Industrial Factory)
+   * 佔地: 面寬 3.0m (6格) × 縱深 3.0m (6格)
+   * 參考附圖 4：雙煙囪重型製造工廠園區
+   * 核心特徵：
+   * - 階梯式重工業深暗紅/玫瑰紅廠房主棟 (壁柱線條、頂部兩列雙排八座排風散熱機組)
+   * - 雙座標誌性高聳混凝土工業排煙煙囪 (高達 1.70m，帶結構環箍與紅白警示冠圈)
+   * - 整合式藍色多層製程/技術控制塔 (Steel Blue Technical Tower)
+   * - 亮黃色高壓製程管線 (Yellow Process Pipelines) 沿外壁垂直與橫向連通
+   * - 左側院落高壓變電所 (Substation) 與散熱鰭片變壓器群
+   * - 內部環形瀝青車道、白線劃設斜列員工停車場、紅色送貨卡車
+   * - 園區高壓照明立燈柱、圍牆與綠化球型矮樹
+   * - 正面朝向：正門車輛出入口、斑馬線與停車場朝向 +Z 軸 (道路方向)
+   */
+  public static createIndustrial_6x6(): THREE.Group {
+    const factory = new THREE.Group();
+    factory.name = 'Industrial_6x6';
+
+    // 1. 混擬土廠區地基 (3.0m x 3.0m)
+    factory.add(this.createBaseIndustrialYard(3.0, 3.0));
+
+    // 2. 重型主廠房建築體
+    const fW = 1.30;
+    const fD = 1.25;
+    const fH = 0.88;
+    const fX = -0.30;
+    const fZ = -0.42;
+
+    const mainHallGeo = new THREE.BoxGeometry(fW, fH, fD);
+    const mainHall = new THREE.Mesh(mainHallGeo, this.wallIndFactoryRedMat);
+    mainHall.position.set(fX, fH / 2 + 0.025, fZ);
+    mainHall.castShadow = true;
+    mainHall.receiveShadow = true;
+    factory.add(mainHall);
+
+    const plinthGeo = new THREE.BoxGeometry(fW + 0.03, 0.045, fD + 0.03);
+    const plinth = new THREE.Mesh(plinthGeo, this.curbIndDarkMat);
+    plinth.position.set(fX, 0.0225 + 0.025, fZ);
+    factory.add(plinth);
+
+    const parapet = this.createFlatParapetRoof(fW, fD, this.wallIndFactoryRedMat, this.steelDarkMat);
+    parapet.position.set(fX, fH + 0.025, fZ);
+    factory.add(parapet);
+
+    // 頂部散熱排風冷卻塔矩陣 (8 座)
+    for (let row = -1; row <= 1; row += 2) {
+      for (let col = -1.5; col <= 1.5; col += 1.0) {
+        const fanGeo = new THREE.BoxGeometry(0.16, 0.065, 0.12);
+        const fan = new THREE.Mesh(fanGeo, this.roofIndHvacGreyMat);
+        fan.position.set(fX + col * 0.24, fH + 0.06 + 0.025, fZ + row * 0.28);
+        fan.castShadow = true;
+        factory.add(fan);
+      }
+    }
+
+    // 正面兩組大型階梯式鼓風進氣過濾塔箱
+    for (let bx of [fX - 0.32, fX + 0.32]) {
+      const blowerGeo = new THREE.BoxGeometry(0.32, 0.34, 0.18);
+      const blower = new THREE.Mesh(blowerGeo, this.roofIndHvacGreyMat);
+      blower.position.set(bx, 0.17 + 0.025, fZ + fD / 2 + 0.09);
+      blower.castShadow = true;
+      factory.add(blower);
+
+      for (let l = 0; l < 4; l++) {
+        const louver = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.012, 0.005), this.steelDarkMat);
+        louver.position.set(bx, 0.08 + l * 0.06 + 0.025, fZ + fD / 2 + 0.182);
+        factory.add(louver);
+      }
+    }
+
+    // 3. 雙座標誌性高聳混凝土工業排煙煙囪 (Twin Iconic Industrial Smokestacks)
+    const stackH = 1.70;
+    const stackR1 = 0.085;
+    const stackR2 = 0.070;
+
+    for (let sx of [-0.05, 0.28]) {
+      const stackGroup = new THREE.Group();
+      stackGroup.position.set(sx, 0.025, -1.15);
+
+      const stackGeo = new THREE.CylinderGeometry(stackR2, stackR1, stackH, 16);
+      const stackMesh = new THREE.Mesh(stackGeo, this.concreteSmokestackMat);
+      stackMesh.position.y = stackH / 2;
+      stackMesh.castShadow = true;
+      stackGroup.add(stackMesh);
+
+      for (let r = 0.35; r <= 0.85; r += 0.25) {
+        const ringGeo = new THREE.TorusGeometry(stackR1 * (1 - (r * 0.15)) + 0.005, 0.007, 6, 16);
+        const ring = new THREE.Mesh(ringGeo, this.steelDarkMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = stackH * r;
+        stackGroup.add(ring);
+      }
+
+      const topGeo = new THREE.CylinderGeometry(stackR2 + 0.012, stackR2 + 0.012, 0.12, 16);
+      const topBand = new THREE.Mesh(topGeo, this.barrelRedMat);
+      topBand.position.y = stackH - 0.06;
+      stackGroup.add(topBand);
+
+      const topRim = new THREE.Mesh(new THREE.CylinderGeometry(stackR2 + 0.018, stackR2 + 0.018, 0.02, 16), this.stripeHazardYellowMat);
+      topRim.position.y = stackH - 0.01;
+      stackGroup.add(topRim);
+
+      factory.add(stackGroup);
+    }
+
+    // 4. 右側藍色多層技術控制塔 (Steel Blue Technical Tower)
+    const towerW = 0.46;
+    const towerD = 0.95;
+    const towerH = 1.15;
+    const towerX = 0.65;
+    const towerZ = -0.35;
+
+    const towerGeo = new THREE.BoxGeometry(towerW, towerH, towerD);
+    const tower = new THREE.Mesh(towerGeo, this.wallIndBlueTowerMat);
+    tower.position.set(towerX, towerH / 2 + 0.025, towerZ);
+    tower.castShadow = true;
+    factory.add(tower);
+
+    const tParapet = this.createFlatParapetRoof(towerW, towerD, this.wallIndBlueTowerMat, this.steelDarkMat);
+    tParapet.position.set(towerX, towerH + 0.025, towerZ);
+    factory.add(tParapet);
+
+    for (let floor = 1; floor <= 3; floor++) {
+      const win = this.createWindow(0.16, 0.14, { style: 'dark', panesX: 1, panesY: 2 });
+      win.position.set(towerX, 0.25 * floor + 0.12 + 0.025, towerZ + towerD / 2 + 0.002);
+      factory.add(win);
+    }
+
+    // 5. 亮黃色製程壓力管道 (Yellow Process Pipelines)
+    const pipeGroup = new THREE.Group();
+    pipeGroup.position.set(towerX + towerW / 2 + 0.02, 0.025, towerZ);
+
+    for (let pIdx of [-0.15, 0.15]) {
+      const vPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.85, 10), this.pipeYellowMat);
+      vPipe.position.set(0, 0.425, pIdx);
+      pipeGroup.add(vPipe);
+
+      const hPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.12, 10), this.pipeYellowMat);
+      hPipe.rotation.z = Math.PI / 2;
+      hPipe.position.set(-0.06, 0.82, pIdx);
+      pipeGroup.add(hPipe);
+    }
+    factory.add(pipeGroup);
+
+    const frontPipe = new THREE.Mesh(new THREE.BoxGeometry(0.70, 0.028, 0.028), this.pipeYellowMat);
+    frontPipe.position.set(fX, 0.58 + 0.025, fZ + fD / 2 + 0.015);
+    factory.add(frontPipe);
+
+    // 6. 左側庭院高壓變電所 (Electrical Substation)
+    const subGroup = new THREE.Group();
+    subGroup.position.set(-1.12, 0, 0);
+
+    for (let i = 0; i < 3; i++) {
+      const trans = this.createTransformerUnit(0.18, 0.16, 0.16);
+      trans.position.set(0, 0, -0.60 + i * 0.40);
+      subGroup.add(trans);
+    }
+    factory.add(subGroup);
+
+    // 7. 前方車道與員工停車位
+    const innerRoadGeo = new THREE.BoxGeometry(2.85, 0.005, 1.05);
+    const innerRoad = new THREE.Mesh(innerRoadGeo, this.asphaltIndYardMat);
+    innerRoad.position.set(0, 0.026, 0.90);
+    factory.add(innerRoad);
+
+    for (let s = 0; s < 4; s++) {
+      const line = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.003, 0.02), this.stripeWhiteMat);
+      line.rotation.y = 0.45;
+      line.position.set(0.85 + s * 0.16, 0.029, 0.80 - s * 0.10);
+      factory.add(line);
+    }
+
+    const redTruck = this.createMiniTruck(0xdc2626, 0x475569);
+    redTruck.position.set(0.95, 0, 0.72);
+    redTruck.rotation.y = -Math.PI / 2 + 0.45;
+    factory.add(redTruck);
+
+    const streetLight1 = this.createIndustrialStreetlight(0.42);
+    streetLight1.position.set(-0.65, 0, 0.65);
+    factory.add(streetLight1);
+
+    const streetLight2 = this.createIndustrialStreetlight(0.42);
+    streetLight2.position.set(0.45, 0, 0.65);
+    factory.add(streetLight2);
+
+    // 8. 園區外圍混凝土安全防護圍牆與綠化造景
+    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(2.90, 0.22, 0.04), this.concreteSmokestackMat);
+    wallBack.position.set(0, 0.11 + 0.025, -1.46);
+    factory.add(wallBack);
+
+    const wallLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.22, 2.90), this.concreteSmokestackMat);
+    wallLeft.position.set(-1.46, 0.11 + 0.025, 0);
+    factory.add(wallLeft);
+
+    const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.22, 2.90), this.concreteSmokestackMat);
+    wallRight.position.set(1.46, 0.11 + 0.025, 0);
+    factory.add(wallRight);
+
+    const wallFrontL = new THREE.Mesh(new THREE.BoxGeometry(0.90, 0.22, 0.04), this.concreteSmokestackMat);
+    wallFrontL.position.set(-0.95, 0.11 + 0.025, 1.46);
+    factory.add(wallFrontL);
+
+    const wallFrontR = new THREE.Mesh(new THREE.BoxGeometry(0.90, 0.22, 0.04), this.concreteSmokestackMat);
+    wallFrontR.position.set(0.95, 0.11 + 0.025, 1.46);
+    factory.add(wallFrontR);
+
+    for (let zx = -0.35; zx <= 0.35; zx += 0.14) {
+      const cw = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.003, 0.14), this.stripeWhiteMat);
+      cw.position.set(zx, 0.029, 1.42);
+      factory.add(cw);
+    }
+
+    const tree1 = this.createDeciduousTree(0.85);
+    tree1.position.set(-1.32, 0, 0.75);
+    factory.add(tree1);
+
+    const tree2 = this.createDeciduousTree(0.85);
+    tree2.position.set(-1.32, 0, -0.15);
+    factory.add(tree2);
+
+    const tree3 = this.createDeciduousTree(0.85);
+    tree3.position.set(1.32, 0, -0.85);
+    factory.add(tree3);
+
+    return factory;
+  }
+
+  // ==========================================
+  // 5. 元資料目錄與統一實例化介面
   // ==========================================
 
   public static getModelsCatalog(): BuildingMetadata[] {
@@ -1681,6 +3172,70 @@ export class BuildingModelFactory {
           '全景落地玻璃幕牆與名貴雙植栽 (常青松柏 + 大落葉樹)',
         ],
       },
+      {
+        id: 'Industrial_4x4',
+        name: '小型工廠 4x4',
+        category: 'Industrial_Low',
+        frontageWidth: 4,
+        lotDepth: 4,
+        capacity: 3,
+        description: '開放式修車與金屬工坊，配備雙柱液壓汽車舉升機、車床工作台、單坡斜頂與條紋排煙煙囪。',
+        features: [
+          '3 人工作人數上限 (3 Workers)',
+          '面寬 4 格 · 縱深 4 格 (2.0m × 2.0m)',
+          '雙柱汽車舉升機 (附備用輪胎與液壓千斤頂)',
+          '綠色工具車床機台、零件貨架與油桶組',
+          '單坡斜頂橘色工廠主棟與紅白警示煙囪',
+        ],
+      },
+      {
+        id: 'Industrial_5x5',
+        name: '維修廠 5x5',
+        category: 'Industrial_Low',
+        frontageWidth: 5,
+        lotDepth: 5,
+        capacity: 4,
+        description: '現代多功能重型維修廠，配備大型鐵捲門車庫、斜頂採光天窗溫室、高架輸送帶斜坡與排氣風管。',
+        features: [
+          '4 人工作人數上限 (4 Workers)',
+          '面寬 5 格 · 縱深 5 格 (2.5m × 2.5m)',
+          '金屬捲門維修大廳與高架輸送斜坡進出洞口',
+          '斜向天窗採光玻璃溫室屋頂與黑色防墜護欄',
+          '屋頂高聳控制塔樓、藍色高空排氣管道與棧板貨箱群',
+        ],
+      },
+      {
+        id: 'Industrial_5x6',
+        name: '物流倉庫 5x6',
+        category: 'Industrial_Low',
+        frontageWidth: 5,
+        lotDepth: 6,
+        capacity: 4,
+        description: '大型現代紅磚物流轉運倉儲中心，正面臨路5格、縱深6格，配備3座貨運裝卸碼頭、大貨車、堆高機與警衛亭。',
+        features: [
+          '4 人工作人數上限 (4 Workers)',
+          '正面臨路 5 格 · 縱深 6 格 (2.5m × 3.0m)',
+          '立體 "WAREHOUSE" 大型招牌與黃色門廊飾牆',
+          '3 座貨櫃裝卸泊位 (1, 2, 3 號碼頭) 與對接廂型貨車',
+          '物流堆高機、多層棧板貨物、黃色送貨廂型車與門口警衛道閘',
+        ],
+      },
+      {
+        id: 'Industrial_6x6',
+        name: '中型工廠 6x6',
+        category: 'Industrial_Low',
+        frontageWidth: 6,
+        lotDepth: 6,
+        capacity: 7,
+        description: '重工業製造園區工廠，配備雙座高聳混凝土警示煙囪、藍色技術塔樓、黃色製程管線、變電所與內部環形車道。',
+        features: [
+          '7 人工作人數上限 (7 Workers)',
+          '面寬 6 格 · 縱深 6 格 (3.0m × 3.0m)',
+          '雙座標誌性超高混凝土排煙煙囪 (高達 1.70m)',
+          '階梯式酒紅廠房、頂部散熱風機矩陣與藍色技術塔',
+          '黃色製程壓力管道、高壓變電所機組與員工停車場',
+        ],
+      },
     ];
   }
 
@@ -1705,6 +3260,18 @@ export class BuildingModelFactory {
         break;
       case 'Residential_4x4':
         building = this.createResidential_4x4();
+        break;
+      case 'Industrial_4x4':
+        building = this.createIndustrial_4x4();
+        break;
+      case 'Industrial_5x5':
+        building = this.createIndustrial_5x5();
+        break;
+      case 'Industrial_5x6':
+        building = this.createIndustrial_5x6();
+        break;
+      case 'Industrial_6x6':
+        building = this.createIndustrial_6x6();
         break;
       default:
         return null;

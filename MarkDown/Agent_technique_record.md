@@ -1222,3 +1222,306 @@ $$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
 - **即時 HUD 狀態氣泡動態推播 (Interactive Tooltip)**：
   - 框選拖曳時動態計算矩形網格維度（$W \times D$）與內部實際涵蓋之路側分區格數 $N_{\text{cells}}$。
   - 即時反饋：「正在框選：$W \times D$ 格（包含 $N$ 格路側分區）· 放開滑鼠以指派用途 · 右鍵取消」。
+
+
+---
+
+### 34. 住宅名下車輛登記與市民出行方式決策系統 (`BuildingManager.ts` & `ParkingManager.ts`)
+
+#### 34.1 核心架構與名下車輛登記機制 (Residence Vehicle Registration Architecture)
+- **多車輛登記模型 (`ResidenceVehicle`)**：
+  - 每個住宅實體（`PlacedBuilding`）維護獨立車輛清單 `vehicles: ResidenceVehicle[]`。
+  - **建屋完工遷入車輛**：房屋完工（`completeConstruction`）時，調度市民自邊界公路開車遷入，車輛登記來源標記為 `source = 'construction'`（建屋遷入）。
+  - **合居併入遷入車輛**：當後續有市民併入合居（`matchJoinExisting`）時，調度併入市民自邊界公路開車遷入，車輛登記來源標記為 `source = 'merge'`（併入遷入）。
+  - **多車輛支援**：若一間房屋有人併入合居，名下即登記兩輛車（一輛為建屋時遷入，一輛為併入時遷入）。
+  - **車輛狀態機轉換**：
+    - `en_route_move_in`：自邊界公路行駛進城中。
+    - `available`：抵達並成功停放於路邊車位（`CurbsideSpot`），與 `ParkingManager` 雙向綁定 `buildingId` 與 `residenceVehicleId`，處於住宅旁閒置可用狀態。
+    - `in_use`：住宅內市民出行時借出使用中，記錄當前駕駛市民 ID 與姓名。
+
+#### 34.2 市民出行方式決策演算法 (Travel Mode Decision Model)
+- **方式 (Mode) 本質**：
+  開車為可供市民選擇之出行方式之一，並非每次出行必定開車出發。出行方式包含：
+  - `drive`：開車出行（使用住宅名下閒置車輛）。
+  - `walk`：步行出行（短程、偏好步行、未成年或車輛皆被合居成員借出時）。
+  - `transit`：大眾運輸出行（偏好公車捷運、保留住宅車輛）。
+- **決策流程 (`decideCitizenTravel`)**：
+  1. **駕駛資格審查 (`canDrive`)**：
+     - 市民年齡必須滿 18 歲（`age >= 18`）。未滿 18 歲之市民（小孩/青年）不可單獨駕車，強制選擇步行或大眾運輸。
+     - 住宅名下必須存在 `status === 'available'` 之可用車輛。若住宅無登記車輛，或所有車輛皆已由其他合居成員借出（`availableVehicles.length === 0`），市民自適應降級為步行或大眾運輸。
+  2. **偏好與情境決策 (Preference & Context)**：
+     - 若 `canDrive` 為真：
+       - `DriveOnly`（自駕偏好）：自住宅名下可用車輛中挑選首輛車輛（`availableVehicles[0]`），進入開車出行模式。
+       - `WalkIfClose`（短途步行偏好）：若目的地距離小於等於 $20\text{m}$（或短途評估），市民選擇步行，名下車輛保留於住宅路側；若距離較遠則選擇開車。
+       - `PreferTransit`（大眾運輸偏好）：高機率搭乘大眾運輸，保留住宅車輛；特定情境下改為開車。
+  3. **狀態更新與佔用鎖定**：
+     - 選擇開車：所選車輛標記 `status = 'in_use'`，關聯 `currentDriverCitizenId`；市民標記 `currentVehicleId`、`currentTravelMode = 'drive'`、`currentActivity = 'Traveling'`。
+     - 選擇步行/大眾運輸：車輛維持 `available`，市民標記 `currentVehicleId = undefined`、`currentTravelMode = selectedMode`、`currentActivity = 'Traveling'`。
+     - 房內現有人數即時更新：`building.currentOccupants = Math.max(0, building.currentOccupants - 1)`。
+
+#### 34.3 市民返家與車輛歸還解鎖機制 (Return Home & Vehicle Restitution)
+- **解鎖歸還流程 (`returnCitizenToResidence`)**：
+  - 檢索市民及其所屬住宅。
+  - 若市民此前為開車出行（`citizen.currentVehicleId` 存在）：
+    - 依車輛 ID 檢索住宅名下該車輛，重設 `vehicle.status = 'available'`，清除 `currentDriverCitizenId` 與 `currentDriverName`。
+    - 車輛重回住宅閒置可用庫，供其他合居成員下次出行借用。
+  - 市民重設 `currentActivity = 'AtHome'`，清除 `currentVehicleId` 與 `currentTravelMode`。
+  - 房內現有人數即時遞增：`building.currentOccupants += 1`。
+
+#### 34.4 雙向資料鏈結與除錯視覺化
+- **ParkingManager 雙向映射**：
+  - `ParkedCar` 結構擴充 `buildingId` 與 `residenceVehicleId`，支援 `getParkedCarByVehicleId` 反向檢索。
+- **3D 懸停 Tooltip 即時顯示**：
+  - 懸停住宅時即時呈現名下所有車輛編號、來源標籤、烤漆顏色與目前狀態（閒置可用 / 某某市民出行中）。
+- **DevMenu 互動測試**：
+  - 房屋分頁新增「🚶🚗 市民出行方式決策測試」，支援一鍵隨機選取市民進行出行決策、查看詳細決策原因，並支援一鍵召回返家。
+
+
+---
+
+### 35. 背景分頁持續運行機制與 Web Worker 心跳計時器架構 (`BackgroundTimer.ts` & `main.ts`)
+
+#### 35.1 瀏覽器背景凍結機制與問題成因
+- **`requestAnimationFrame` (rAF) 背景節流**：
+  現代瀏覽器（Chromium、WebKit、Gecko）為了節省 CPU/GPU 資源與筆記型電腦電量，當分頁切換為後台（`document.visibilityState === 'hidden'`）或視窗被最小化時，會主動暫停或極大幅度降低 rAF 的回呼頻率（降為 0 ~ 1 FPS）。
+- **`clampedDelta` 時間截斷影響**：
+  若在迴圈中採用 `clampedDelta = Math.min(delta, 0.1)` 防穿模保護，當使用者離開分頁再切回時，累積數秒或數分鐘的時間增量會被強制截斷為 0.1 秒，導致切離期間的遊戲世界時間被直接丟棄。
+- **主執行緒計時器限制**：
+  若僅在主執行緒使用 `window.setInterval` 或 `window.setTimeout`，瀏覽器在後台分頁中依然會實施計時器限頻（Throttling to $\ge 1000\text{ms}$）。
+
+#### 35.2 Web Worker 心跳計時器設計 (`BackgroundTimer.ts`)
+- **Web Worker 的獨立性優勢**：
+  Web Worker 執行緒獨立於主渲染執行緒，不受分頁前景/後台 rAF 凍結政策約束，其內部的 `setInterval` 即使在分頁隱藏狀態下依然能精確以指定毫秒間隔觸發。
+- **內聯 Blob URL Worker 架構**：
+  - **優點**：不依賴打包工具的額外 Worker 插件配置，在 Vite 開發環境、預覽環境、生產構建以及靜態伺服器中 100% 相同行為且零額外網路請求。
+- **精確真實 Delta 時間計算**：
+  心跳觸發時，主執行緒利用高精度時鐘計算真實時間增量：
+  $$\Delta t_{\text{raw}} = \frac{\text{performance.now}() - t_{\text{last}}}{1000}$$
+  $$\Delta t_{\text{clamped}} = \min(\max(\Delta t_{\text{raw}}, 0), 0.1)$$
+- **優雅降級 (Fallback)**：
+  若環境受限於特定安全策略（如嚴格 CSP），系統自動捕獲異常並切換為 `window.setInterval` 備援，確保程式穩健不拋出未捕獲例外。
+
+#### 35.3 模擬迴圈與渲染迴圈解耦架構 (`main.ts`)
+- **職責分離原則**：
+  - **`stepSimulation(delta)`（邏輯層）**：
+    - `TimeManager.update(clampedDelta)`：推進遊戲年月日與分秒。
+    - `RoadManager.update(simDelta, isPaused)`：紅綠燈倒數計時與相位切換。
+    - `VehicleManager.update(simDelta, isPaused)`：車輛沿樣條軌跡位移、跟車排隊隊列、紅綠燈停等。
+    - `BuildingManager.update(simDelta, isPaused)`：房屋建造進度、市民活動、車輛歸屬管理。
+    - `BottomStatusBar.updateStats({ population })`：底部人口即時同步。
+  - **`renderFrame(delta)`（視圖層）**：
+    - `CameraManager.update(delta)`：相機視角控制與平移阻尼。
+    - `DevMenu.update(delta)`：3D 展台模型自轉與動畫預覽。
+    - `renderer.render(scene, camera)`：Three.js WebGL 畫格著色。
+- **喚醒邊界平滑過渡**：
+  當由 Background 轉換至 Foreground 時：
+  1. 立即呼叫 `backgroundTimer.stop()` 停止心跳。
+  2. 呼叫 `clock.getDelta()` 消耗並重置 `THREE.Clock` 的內部舊時間戳記，防止第一畫格讀取到背景休眠累積的巨大 Delta。
+  3. 重新調度 `animationFrameId = requestAnimationFrame(animate)`，達到無感、無穿透、無突躍的平滑視覺切換。
+
+---
+
+### 36. 大規模住宅生成效能瓶頸分析與優化架構設計
+
+#### 36.1 WebGL 渲染瓶頸 (Draw Call 與 Shadow Map 雙重膨脹)
+- **單棟住宅複合 Mesh 量**：
+  在目前 `BuildingModelFactory` 設計中，為呈現高質感 Low-Poly 細節，一棟房屋包含：
+  - 基座與庭院（基礎石台、草皮、車道石板）：3 ~ 5 個 Mesh
+  - 建築量體（主樓、側翼、懸挑陽台）：3 ~ 6 個 Mesh
+  - 屋頂系統（雙坡頂、四坡頂、屋脊封邊瓦條）：2 ~ 4 個 Mesh
+  - 門窗構件（深進門廊雨棚、窗框、玻璃窗格、窗台）：8 ~ 15 個 Mesh
+  - 植栽與庭院裝飾（樹幹、多層多面體樹冠、方剪矮籬、花叢）：4 ~ 8 個 Mesh
+  - 柵欄構件（每片柵欄包含 10 ~ 30 根獨立木片條）：10 ~ 30 個 Mesh
+  - 完工配屬私家車：約 17 個 Mesh
+  **合計**：單一建築實體平均擁有 50 ~ 80 個獨立 Mesh。
+- **Draw Call 指數級膨脹**：
+  在 WebGL 渲染管線中，每個獨立 Mesh 代表一次獨立的狀態綁定與 `gl.drawElements` 調用：
+  $$N_{\text{DrawCalls}} = N_{\text{Buildings}} \times (N_{\text{Meshes/Building}} + N_{\text{ShadowCasters}})$$
+  - 當城市達到 50 棟房屋時，主場景 Mesh 量達 $50 \times 60 \approx 3,000$ 個。
+  - 太陽光實時陰影（DirectionalLight Shadow Map）覆蓋全城（240m×240m），所有細小構件均標記 `castShadow = true`，使 Shadow Map Pass 必須將所有幾何體再繪製一次。
+  - 單幀總 Draw Call 高達 $3,000 \times 2 = 6,000$ 次，遠超單線程 WebGL 流暢幀率負荷（安全區間通常為 $\le 1,500$ 次）。
+
+#### 36.2 滑鼠懸停射線求交瓶頸 (`checkBuildingHover`)
+- **未節流高頻觸發**：
+  `mousemove` 事件在現代高頻率滑鼠（125Hz ~ 1000Hz）或高刷新螢幕（144Hz）下一秒觸發上百次。
+- **全幾何體遞迴求交**：
+  ```typescript
+  // 現有瓶頸代碼
+  this.raycaster.intersectObjects(candidates, true);
+  ```
+  `recursive = true` 迫使 Three.js 對所有候選 Group 內之所有子 Mesh 進行遍歷，計算逆世界矩陣、包圍球測試以及三角面射線求交。
+  在 3,000+ Mesh 下，滑鼠微移即消耗 10 ~ 30ms CPU 時間，直接擊穿 16.6ms 影格預算（引發 15 ~ 30 FPS 驟降）。
+
+#### 36.3 建地搜尋之圖演算法開銷 (`findSiteForModel`)
+- **雙重循環與圖尋路調用**：
+  在隨機產生新建需求時，演算法遍歷未佔用住宅格（數百格）並對 4 個朝向測試：
+  $$\text{Complexity} = O(N_{\text{Cells}} \times 4 \times T_{\text{Pathfinding}})$$
+  每次測試若調用 `hasPathFromHighway`，皆觸發兩次起點至目標車道的 A* 搜尋。在路網擴大時，此操作將造成短暫的單幀卡頓（Frame Hitch）。
+
+#### 36.4 三階段優化架構藍圖
+- **階段 1：射線 Hitbox 化與陰影剪枝（輕量、零破壞性改動）**：
+  1. **隱形包圍盒 (Proxy Hitbox)**：每棟房屋維護單一不可見的 `BoxGeometry`，`raycaster.intersectObjects([hitbox], false)` 僅需測試單一包圍盒（12 面），求交速度提升 50 倍以上。
+  2. **滑鼠懸停節流 (rAF Throttle)**：同一畫格內至多執行一次射線檢測，避免滑鼠移動爆發佔用主線程。
+  3. **陰影剪枝 (Shadow Caster Pruning)**：柵欄木片、小矮籬、窗框等細節關閉 `castShadow`，僅主樓體與屋頂投射陰影，Shadow Pass 繪製調用減少 60% ~ 75%。
+- **階段 2：完工房屋靜態幾何合併 (`BufferGeometryUtils.mergeGeometries`)**：
+  - 房屋施工完畢後外觀完全靜態（吊臂拆除），可將相同材質之幾何體（象牙白牆、石板屋頂、木質構件）在世界座標系或房屋局部座標下合併。
+  - 單棟房屋從 60 個 Mesh 劇降為 2 ~ 3 個合併 Mesh，100 棟房屋 Draw Call 從 6,000 降至 200 ~ 300，效能提升 10 ~ 20 倍。
+- **階段 3：實例化與路網連通分量查表 (`InstancedMesh` & Connected Components)**：
+  - 路邊車輛、路樹與標誌改採 `THREE.InstancedMesh` 渲染，數千物件單一 Draw Call。
+  - 路網連通性改採連通分量（Disjoint Set / BFS 標記），以 $O(1)$ 查表直接判斷道路是否連通外聯高速公路，消除建地配對時的重複 A* 運算。
+
+---
+
+### 37. 模型端原型預烘焙（Pre-baked Archetype）幾何合併技術
+
+#### 37.1 為什麼在「模型端/召喚時」合併優於「完工後合併」？
+- **動態組件邊界清晰**：
+  在現行城市模擬中，施工狀態下唯一具有獨立動畫變形的是：
+  1. `scaffoldingGroup`（鋼管鷹架、閃爍警示球、迴轉變幅起升之塔式吊臂）。
+  2. 房屋本體整體根節點 `buildingMesh.position.y`（由 $-0.4\text{m}$ 上升至 $0\text{m}$）與 `buildingMesh.scale.y`（由 $0.05$ 放大至 $1.0$）。
+- 房屋內部的數十個子構件（草皮地坪、階梯水線、主體量體、門窗雨棚、屋脊瓦片、白木柵欄、花樹）相對於 `buildingMesh` 的局部座標與旋轉**自始至終固定不變**。
+- 若改在模型工廠端直接產出合併網格：
+  1. 施工期間就已經是極簡狀態，多棟同時施工也不會產生 Draw Call 突波。
+  2. 避開了完工切換瞬間需在執行期解構 Group、動態合併 Geometry 的 CPU 抖動與物件替換邏輯。
+
+#### 37.2 原型預烘焙快取機制 (Pre-baked Archetype Cache)
+- 目前遊戲中低密度住宅共有 5 種模型（`Residential_2x2`, `Residential_2x3`, `Residential_3x2`, `Residential_3x3`, `Residential_4x4`）。
+- 同型號房屋在幾何形狀與材質上是完全一致的，因此無需在每次「召喚」時都跑一次合併運算，而是在工廠初始化時對每款房型執行**一次性烘焙（Bake Once）**：
+  ```
+  [原始幾何裝配邏輯 (代碼組裝)]
+            │
+            ▼ 僅執行一次
+  [按材質分類收集子幾何體 (Multi-Material Grouping)]
+            │ 矩陣烘焙: geo.applyMatrix4(child.matrix)
+            ▼
+  [BufferGeometryUtils.mergeGeometries(geos)]
+            │
+            ▼
+  Map<ModelId, MergedMeshes[]> (快取儲存)
+  ```
+- **生成新房屋時**：
+  直接實例化快取的 `BufferGeometry`：
+  ```typescript
+  const house = new THREE.Group();
+  for (const part of cachedArchetype.parts) {
+    house.add(new THREE.Mesh(part.geometry, part.material));
+  }
+  ```
+  - 幾何體內存共用（全城 100 棟 `Residential_2x2` 共用同一份 VRAM 頂點緩衝區）。
+  - 生成時間降至趨近於零（$\approx 0.001\text{ms}$）。
+
+#### 37.3 材質分組規範 (Multi-Material Grouping)
+因單一 WebGL Mesh 僅能綁定一個 Material（或 Material Group），依材質分為 4~6 個合併網格：
+1. **結構外牆 (Stucco & Stone)**：象牙白/暖沙灰泥外牆、地基石台水線。
+2. **屋頂系統 (Roofs)**：石板深灰瓦、西班牙陶瓦、屋脊瓦飾條。
+3. **木質構件 (Wood & Fences)**：雪松木板、暗色深木樑柱、美式白木柵欄。
+4. **地坪景觀 (Hardscape & Greens)**：草皮、車道石板、樹幹、低多邊形樹冠、修剪矮籬。
+5. **半透明採光窗 (Glass & Translucents)**：天窗玻璃（需設 `transparent: true`, `depthWrite: false`）。
+透過以上分組，單棟房屋 Draw Call 固定於 5 次以內，全城 100 棟房屋 Draw Call 控制在 500 次以下。
+
+---
+
+### 39. 市民上班通勤系統、就業職缺配對與人車交互動線技術實作
+
+#### 39.1 工廠職缺與人數雙指標資料結構
+- 在 `PlacedBuilding` 資料結構中，工業建築類別（`metadata.category === 'Industrial_Low'`）維護兩項獨立指標：
+  1. **入職人數 (`employedWorkerIds: string[]`)**：
+     已簽約或被分配至該工廠之市民 ID 清單，其上限受限於該建築物型號之容量 `metadata.capacity`。
+  2. **現在內部人數 (`currentOccupants: number`)**：
+     目前實體人在工廠建築物內部的工人數。當市民尚在步行或開車路上時，內部人數不遞增；當市民步行動態走抵工廠大門後，內部人數立即 $+1$。市民下班返家後，內部人數 $-1$。
+- **懸停 Tooltip 與 DevMenu 顯示規範**：
+  - 3D 懸停 Tooltip 即時顯示：`💼 入職人數: X / Y 人` 與 `👥 現在內部人數: Z 人`。
+  - 清單卡片顯示：`🏭 工廠名 (規格) | 入職: X/Y人 | 內部: Z人`。
+
+#### 39.2 50% 交通方式決策與無車降級演算法
+- 演算法流程：
+  ```
+  [隨機選取一位在家的市民]
+             │
+             ▼
+  [隨機 50% 擲骰: rollDrive]
+        ├── 50% true (開車) ──► 檢查住宅名下是否有 available 車輛
+        │                            ├── 有: mode = 'drive', 借出車輛
+        │                            └── 無: 自動降級為 mode = 'walk'
+        └── 50% false (步行) ─► mode = 'walk'
+  ```
+- **狀態轉換**：
+  - 市民離開住宅：`homeBuilding.currentOccupants = Math.max(0, homeBuilding.currentOccupants - 1)`
+  - 市民活動狀態：`citizen.currentActivity = 'CommutingToWork'`
+
+#### 39.3 多段人車動線生命週期 (Multi-stage Commute Pipeline)
+1. **步行模式 (`mode === 'walk'`)**：
+   - 透過 `findBestRoadPath(homeTile, factoryTile)` 擷取路網轉向點與人行道座標序列。
+   - 實例化市民 3D 模型（`CitizenModelFactory.createCitizen`），沿路網走至工廠大門。
+   - 抵達工廠大門觸發 `onArrivedDestination`，移除行人模型，`factory.currentOccupants += 1`，市民狀態切換為 `AtWork`。
+2. **開車模式 (`mode === 'drive'`)**：
+   - **階段 A (走去上車)**：市民自住宅門前生成，步行走至車輛停放處（`carSpotPos`）。抵達後觸發回調，解除路側停車位佔用（`parkingManager.removeParkedCar`）。
+   - **階段 B (行駛前往)**：以 `vehicleManager.spawnMovingInVehicle` 生成行車，設定 `keepMeshOnArrive = true`，沿連續車道巡航至工廠所在路段。
+   - **階段 C (就近找停車位)**：以工廠前門座標 `factory.frontWorldPos` 呼叫 `parkingManager.findClosestAvailableSpot` 尋找最近之合法路邊停車格。
+   - **階段 D (停車入庫)**：呼叫 `parkingManager.parkExistingCarMesh` 將車輛網格就近停入該格位，更新車輛停泊紀錄。
+   - **階段 E (下車入廠)**：市民自停車格位路緣下車生成 3D 行人，步行進入工廠大門。抵達大門後行人模型隱藏，`factory.currentOccupants += 1`，市民狀態切換為 `AtWork`。
+
+#### 39.4 一鍵召回返家機制 (`recallAllCitizensToResidence`)
+- 清理所有在途歩行的行人 3D Mesh，防止殘留幽靈行人。
+- 遍歷所有市民：
+  - 若市民處於上班中（`AtWork`），扣除對應工廠內部人數。
+  - 若市民借出名下車輛（`currentVehicleId` 存在），移除工廠路側停車格之車輛，重新將車輛以路邊停車方式停泊於其住宅門前，恢復 `available`。
+  - 市民重設為 `AtHome`，住宅 `currentOccupants += 1`。
+
+
+#### 38.1 低密度工業分區規格與可視化渲染
+- **分區枚舉擴充**：
+  `ZoneType` 擴展支援 `'Industrial'`（與 `'Residential'`、`'None'` 並列）。
+- **調色盤定義**：
+  採用工業標準琥珀黃（Amber）：
+  - 網格預設材質：`industrialMat`（`color: 0xf59e0b`, `roughness: 0.85`）。
+  - 筆刷懸停材質：`hoverMatIndustrial`（`color: 0xfbbf24`, `opacity: 0.6`）。
+  - 框選填充與邊框材質：`boxFillMatIndustrial`（`0xf59e0b`, `opacity: 0.35`）與 `boxBorderMatIndustrial`（`0xd97706`, `opacity: 0.9`）。
+- **路側自動網格生成**：
+  每個路側可規劃地塊大小固定為 $0.5\text{m} \times 0.5\text{m}$（`CELL_SIZE = 0.5`）。`ZoningManager.commitBoxSelection` 或單擊筆刷即將指定座標之地塊標記為 `'Industrial'`。
+
+#### 38.2 四款程序化工業建築 3D 建模與參考圖考究
+
+| 模型 ID | 名稱 | 網格規格 (面寬 x 進深) | 實體尺寸 (寬 x 深) | 工作人數上限 | 核心特徵與細節 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `Industrial_4x4` | 小型工廠 4x4 | $4 \times 4$ 格 | $2.0\text{m} \times 2.0\text{m}$ | **3 人** | 橘紅外牆浪板工坊、斜頂單坡石板屋脊、黃黑條紋磚石煙囪、高位採光窗、室外水泥硬化地坪、雙柱車輛維修升降台（置有檢修輪胎）、維修工具推車與車床桌面、多層零配件貨架、彩色機油桶、地面千斤頂與工業鐵絲網防護欄。 |
+| `Industrial_5x5` | 維修廠 5x5 | $5 \times 5$ 格 | $2.5\text{m} \times 2.5\text{m}$ | **4 人** | 暖黃灰泥主體配暗紅踢腳抗污基座、高強度金屬捲門、高架傳輸/裝卸斜坡道（附雙側夜間防爆壁燈）、傾斜大面積溫室鋼架天窗（透光藍色玻璃）、屋頂金屬防護圍欄與 HVAC 空調機組、橫跨頂部的深藍色排氣通風管道連至外側機房、右側雙層控制塔樓、落地貨箱棧板堆疊與交通警示錐。 |
+| `Industrial_5x6` | 物流倉庫 5x6 | $5 \times 6$ 格<br>(**5m 貼馬路**) | $2.5\text{m} \times 3.0\text{m}$ | **4 人** | 磚紅耐磨倉儲主樓體、亮黃色折線門頭挑簷與立體黃色「WAREHOUSE」招牌、3 座標準裝卸月台（1 號靠泊全尺寸白色半掛貨櫃車、2 號液壓升降月台板、3 號安全步梯）、工作區堆高機、快遞配送小廂車、進出口警衛崗亭與起落道閘、外圍金屬圍網與修剪整齊的綠化樹籬。 |
+| `Industrial_6x6` | 中型工廠 6x6 | $6 \times 6$ 格 | $3.0\text{m} \times 3.0\text{m}$ | **7 人** | 雙聯深紅階梯式重型製造廠房、屋頂 8 具矩陣式冷凝冷卻器、雙聯高達 $1.70\text{m}$ 圓柱形混凝土排氣煙囪（配白色與金黃航空警示環帶）、正面進風過濾除塵方塊、深藍色製程塔樓（附檢修直梯與立體黃色輸送管路）、三相油浸式變電單元、寬敞內部車道與斜角劃線停車位（停泊紅色卡車）、實心水泥安全防護高牆與道路照明燈柱。 |
+
+- **正面臨路朝向規範**：
+  所有 4 款模型的門戶、車道與貨物裝卸月台在本地座標系中統一朝向 $+Z$ 軸。當建地選定時，`BuildingManager` 依據相鄰道路的方向計算旋轉角：
+  - 南側鄰路（`S`）：$\text{rotation.y} = 0$
+  - 北側鄰路（`N`）：$\text{rotation.y} = \pi$
+  - 東側鄰路（`E`）：$\text{rotation.y} = -\frac{\pi}{2}$
+  - 西側鄰路（`W`）：$\text{rotation.y} = \frac{\pi}{2}$
+  確保所有工業建築正面 100% 緊貼相鄰的行車道。
+
+#### 38.3 工業建地搜尋與自動起建演算法 (`BuildingManager.buildIndustrialBuilding`)
+- **地塊類型隔離**：
+  在 `canFitModelAt(site, meta)` 中，依 `meta.category` 嚴格判定：
+  - 若 `category === 'Industrial_Low'`，目標格子之 `zoneType` 必須為 `'Industrial'`。
+  - 若 `category === 'Residential_Low'`，目標格子之 `zoneType` 必須為 `'Residential'`。
+  杜絕住宅蓋在工業區或工廠侵入住宅區。
+- **正面臨路與公路連通檢驗**：
+  建地搜尋演算法要求：
+  1. 待建矩形區域內所有 $W \times D$ 格子皆為未被佔用之對應分區格子。
+  2. 矩形朝向馬路那一側的格子，必須緊鄰一條雙向車道（`facingLane` 存在）。
+  3. 該車道必須具備直達城市邊界外聯公路的雙向路徑（`hasPathFromHighway`）。
+- **即時起建與施工狀態切換**：
+  為供開發者快速檢驗與配置，`buildIndustrialBuilding` 生成建築後直接將其標記為 `status = 'completed'`、`constructionProgress = 1.0`，並將建築主體恢復正常高度（$y=0$）、隱藏施工鷹架與吊臂。
+
+#### 38.4 開發者工具 (DevMenu) 工業建造模組
+- **模型展台擴充**：
+  `#dev-model-select` 新增 `<optgroup label="低密度工業區模型 (正面朝向 +Z 馬路)">`，可在 3D 展台中切換檢視並顯示工作人數上限。
+- **即時起建控制卡片**：
+  - `⚡ 立即檢查並起建工業建築 (自動配對)`：自動於已劃分之工業區內尋找可容納之最大或隨機適配尺寸。
+  - 4 個獨立按鈕分別支援指定起建 4x4、5x5、5x6、6x6。
+  - 實時狀態回饋：無地塊、無臨路、或起建成功之座標與職缺數。
+- **清單與數據解耦**：
+  `DevMenu.updateHousingUI` 分別維護：
+  - 住宅統計：已建住宅棟數、總居住人口（`getTotalPopulation`）。
+  - 工業統計：已建工廠棟數（`getIndustrialBuildings().length`）、提供職缺上限（`getTotalIndustrialCapacity().totalCapacity`）。
+
+
+

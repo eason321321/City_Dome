@@ -550,6 +550,12 @@ export class DevMenu {
                 <option value="Residential_3x3">🏡 低密度住宅 3x3 (3 人 / 雙層別墅附車道與陽台)</option>
                 <option value="Residential_4x4">🏡 低密度住宅 4x4 (4 人 / 包浩斯豪華車庫大宅)</option>
               </optgroup>
+              <optgroup label="低密度工業區模型 (正面朝向 +Z 馬路)">
+                <option value="Industrial_4x4">🏭 小型工廠 4x4 (3人 / 開放式修車金屬工坊)</option>
+                <option value="Industrial_5x5">🔧 維修廠 5x5 (4人 / 重型維修採光溫室廠)</option>
+                <option value="Industrial_5x6">📦 物流倉庫 5x6 (4人 / 三碼頭物流轉運中心)</option>
+                <option value="Industrial_6x6">🏗️ 中型工廠 6x6 (7人 / 雙煙囪重型製造園區)</option>
+              </optgroup>
             </select>
 
             <div class="dev-status-box" id="dev-model-spec-box">
@@ -706,6 +712,88 @@ export class DevMenu {
             </div>
             <div id="dev-housing-list" style="font-size: 11px; color: #94a3b8; max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
               暫無已建房屋
+            </div>
+          </div>
+
+          <!-- 隨機市民上班測試面板 -->
+          <div class="dev-tool-card">
+            <div class="dev-tool-title">
+              <span>🏭 隨機市民上班測試</span>
+              <span id="dev-commute-badge" style="font-size: 10px; color: #f59e0b;">通勤系統</span>
+            </div>
+            <div class="dev-tool-desc">
+              隨機選取一位在家的市民，以 50% 機率決定開車或步行上班。若抽中開車但住宅無閒置車輛，自動改為步行。開車抵達工廠後就近尋找路邊停車位停車，下車步行進入工廠。
+            </div>
+            <div style="display: flex; gap: 4px; margin-top: 4px;">
+              <button class="dev-action-btn" id="dev-commute-test-btn" style="flex: 1; font-size: 11px; padding: 6px 2px; background: linear-gradient(135deg, #f59e0b, #ea580c); color: #fff; font-weight: 600;">
+                💼 隨機市民上班測試
+              </button>
+              <button class="dev-action-btn secondary" id="dev-commute-return-btn" style="flex: 1; font-size: 11px; padding: 6px 2px;">
+                🏠 召回所有市民返家
+              </button>
+            </div>
+            <div id="dev-commute-log" style="margin-top: 6px; padding: 6px 8px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; font-size: 11px; color: #cbd5e1; min-height: 48px; max-height: 140px; overflow-y: auto;">
+              點選按鈕進行隨機市民上班測試
+            </div>
+          </div>
+
+          <!-- 低密度工業區建造工具卡片 -->
+          <div class="dev-tool-card" id="dev-card-industrial">
+            <div class="dev-tool-title">
+              <span>🏭 低密度工業區建造</span>
+              <span id="dev-industrial-badge" style="font-size: 10px; color: #f59e0b;">已就緒</span>
+            </div>
+            <div class="dev-tool-desc">
+              即時掃描全市低密度工業區（琥珀黃），檢查是否有符合「正面緊貼馬路」與「具外聯公路路徑」之建地，並立即起建工業建築。
+            </div>
+
+            <div class="dev-status-box">
+              <div class="dev-status-row">
+                <span class="dev-status-label">已建工業建築:</span>
+                <span class="dev-status-val" id="dev-industrial-count-val" style="color: #f59e0b;">0 棟</span>
+              </div>
+              <div class="dev-status-row">
+                <span class="dev-status-label">提供工作職缺上限:</span>
+                <span class="dev-status-val" id="dev-industrial-cap-val" style="color: #38bdf8;">0 人</span>
+              </div>
+              <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.08);">
+                <div style="color: #94a3b8; font-size: 11px; margin-bottom: 2px;">建造反饋狀態:</div>
+                <div id="dev-industrial-status-val" style="font-size: 11.5px; color: #cbd5e1; font-weight: 500;">
+                  點選下方按鈕立即檢查並起建
+                </div>
+              </div>
+            </div>
+
+            <button class="dev-action-btn" id="dev-build-ind-auto-btn" style="width: 100%; margin-bottom: 6px; font-weight: 600; font-size: 12px; padding: 8px 4px; background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff;">
+              ⚡ 立即檢查並起建工業建築 (自動配對任意合適尺寸)
+            </button>
+
+            <div style="color: #cbd5e1; font-size: 11px; font-weight: 600; margin-top: 4px; margin-bottom: 4px;">
+              指定尺寸檢查起建:
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+              <button class="dev-action-btn secondary" id="dev-build-ind-4x4-btn" style="font-size: 11px; padding: 6px 2px;">
+                🏭 4x4 小型工廠 (3人)
+              </button>
+              <button class="dev-action-btn secondary" id="dev-build-ind-5x5-btn" style="font-size: 11px; padding: 6px 2px;">
+                🔧 5x5 維修廠 (4人)
+              </button>
+              <button class="dev-action-btn secondary" id="dev-build-ind-5x6-btn" style="font-size: 11px; padding: 6px 2px;">
+                📦 5x6 物流倉庫 (4人)
+              </button>
+              <button class="dev-action-btn secondary" id="dev-build-ind-6x6-btn" style="font-size: 11px; padding: 6px 2px;">
+                🏗️ 6x6 中型工廠 (7人)
+              </button>
+            </div>
+          </div>
+
+          <!-- 全市已建工業建築清單 -->
+          <div class="dev-tool-card">
+            <div class="dev-tool-title">
+              <span>全市已建工業建築清單</span>
+            </div>
+            <div id="dev-industrial-list" style="font-size: 11px; color: #94a3b8; max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
+              暫無已建工業建築
             </div>
           </div>
         </div>
@@ -1013,6 +1101,93 @@ export class DevMenu {
           this.updateHousingUI();
         });
       }
+    });
+
+    // 市民上班通勤與返家測試按鈕綁定
+    const commuteTestBtn = this.panelContainer.querySelector('#dev-commute-test-btn');
+    const commuteReturnBtn = this.panelContainer.querySelector('#dev-commute-return-btn');
+    const commuteLog = this.panelContainer.querySelector('#dev-commute-log');
+
+    commuteTestBtn?.addEventListener('click', () => {
+      if (!this.buildingManager) return;
+      const res = this.buildingManager.testRandomCitizenCommute();
+      if (commuteLog) {
+        if (!res.success) {
+          commuteLog.innerHTML = `<span style="color: #f87171;">${res.reason}</span>`;
+        } else {
+          const modeBadge = res.mode === 'drive'
+            ? '<span style="color: #4ade80; font-weight: bold;">🚗 開車通勤</span>'
+            : '<span style="color: #fbbf24; font-weight: bold;">🚶 步行通勤</span>';
+
+          const vehDetail = res.vehicle
+            ? `<div style="font-size: 10.5px; color: #a5f3fc; margin-top: 2px;">🚘 使用車輛: #${res.vehicle.id} (${res.vehicle.sourceLabel} · ${res.vehicle.colorName})</div>`
+            : '<div style="font-size: 10.5px; color: #94a3b8; margin-top: 2px;">🚶 步行出發 (住宅車輛保留在位)</div>';
+
+          commuteLog.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+              <span style="font-weight: bold; color: #f1f5f9;">${res.citizen?.name} (${res.citizen?.age}歲)</span>
+              ${modeBadge}
+            </div>
+            <div style="font-size: 11px; color: #cbd5e1; margin-top: 2px;">
+              <span>🏠 出發: ${res.homeBuilding?.metadata.name} ➔ 🏭 上班處: ${res.factory?.metadata.name}</span>
+            </div>
+            ${vehDetail}
+            <div style="font-size: 10.5px; color: #94a3b8; margin-top: 3px;">📋 決策說明: ${res.reason}</div>
+          `;
+        }
+      }
+      this.updateHousingUI();
+    });
+
+    commuteReturnBtn?.addEventListener('click', () => {
+      if (!this.buildingManager) return;
+      const recalledCount = this.buildingManager.recallAllCitizensToResidence();
+      if (commuteLog) {
+        if (recalledCount === 0) {
+          commuteLog.innerHTML = '<span style="color: #94a3b8;">目前所有市民皆已在家中。</span>';
+        } else {
+          commuteLog.innerHTML = `<span style="color: #4ade80;">✅ 已成功召回 ${recalledCount} 位市民平安返家，住宅名下車輛已歸還恢復閒置可用！</span>`;
+        }
+      }
+      this.updateHousingUI();
+    });
+
+    // 2.2 工業建築建造按鈕綁定
+    const buildIndAutoBtn = this.panelContainer.querySelector('#dev-build-ind-auto-btn');
+    const indStatusVal = this.panelContainer.querySelector('#dev-industrial-status-val');
+    buildIndAutoBtn?.addEventListener('click', () => {
+      if (!this.buildingManager) return;
+      const res = this.buildingManager.buildIndustrialBuilding();
+      if (indStatusVal) {
+        if (res.success) {
+          indStatusVal.innerHTML = `<span style="color: #4ade80;">✅ ${res.message}</span>`;
+        } else {
+          indStatusVal.innerHTML = `<span style="color: #f87171;">⚠️ ${res.message}</span>`;
+        }
+      }
+      this.updateHousingUI();
+    });
+
+    const indButtons: { id: string; modelId: string }[] = [
+      { id: '#dev-build-ind-4x4-btn', modelId: 'Industrial_4x4' },
+      { id: '#dev-build-ind-5x5-btn', modelId: 'Industrial_5x5' },
+      { id: '#dev-build-ind-5x6-btn', modelId: 'Industrial_5x6' },
+      { id: '#dev-build-ind-6x6-btn', modelId: 'Industrial_6x6' },
+    ];
+    indButtons.forEach(({ id, modelId }) => {
+      const btn = this.panelContainer.querySelector(id);
+      btn?.addEventListener('click', () => {
+        if (!this.buildingManager) return;
+        const res = this.buildingManager.buildIndustrialBuilding(modelId);
+        if (indStatusVal) {
+          if (res.success) {
+            indStatusVal.innerHTML = `<span style="color: #4ade80;">✅ ${res.message}</span>`;
+          } else {
+            indStatusVal.innerHTML = `<span style="color: #f87171;">⚠️ ${res.message}</span>`;
+          }
+        }
+        this.updateHousingUI();
+      });
     });
 
     // 3. 模型下拉選單切換
@@ -1356,22 +1531,27 @@ export class DevMenu {
           .map((f) => `<div style="color: #cbd5e1;">· ${f}</div>`)
           .join('');
 
+        const isInd = meta.category === 'Industrial_Low';
         specBox.innerHTML = `
           <div class="dev-status-row">
             <span class="dev-status-label">名稱:</span>
-            <span class="dev-status-val" style="color: #4ade80;">${meta.name}</span>
+            <span class="dev-status-val" style="color: ${isInd ? '#fbbf24' : '#4ade80'};">${meta.name}</span>
+          </div>
+          <div class="dev-status-row">
+            <span class="dev-status-label">建築類別:</span>
+            <span class="dev-status-val" style="color: ${isInd ? '#f59e0b' : '#38bdf8'};">${isInd ? '🏭 低密度工業區' : '🏡 低密度住宅區'}</span>
           </div>
           <div class="dev-status-row">
             <span class="dev-status-label">地塊佔地:</span>
             <span class="dev-status-val">面寬 ${meta.frontageWidth} 格 (${meta.frontageWidth * 0.5}m) × 縱深 ${meta.lotDepth} 格 (${meta.lotDepth * 0.5}m)</span>
           </div>
           <div class="dev-status-row">
-            <span class="dev-status-label">居住人口:</span>
+            <span class="dev-status-label">${isInd ? '工作人數上限:' : '居住人口:'}</span>
             <span class="dev-status-val" style="color: #fbbf24; font-size: 13px;">${meta.capacity} 人 (Capacity)</span>
           </div>
           <div class="dev-status-row">
             <span class="dev-status-label">正面朝向:</span>
-            <span class="dev-status-val" style="color: #22c55e;">正門面向 +Z 軸（面朝馬路）</span>
+            <span class="dev-status-val" style="color: #22c55e;">正門/車道面向 +Z 軸（面朝馬路）</span>
           </div>
           <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 11px;">
             ${featureItems}
@@ -1397,6 +1577,9 @@ export class DevMenu {
 
   public setBuildingManager(bm: BuildingManager): void {
     this.buildingManager = bm;
+    this.buildingManager.setOnCommuteStateChangedCallback(() => {
+      this.updateHousingUI();
+    });
   }
 
   public updateHousingUI(): void {
@@ -1407,7 +1590,7 @@ export class DevMenu {
     const matchStatusVal = this.panelContainer.querySelector('#dev-matching-status-val');
     const listElem = this.panelContainer.querySelector('#dev-housing-list');
 
-    const buildings = this.buildingManager.getAllBuildings();
+    const buildings = this.buildingManager.getResidentialBuildings();
     if (countVal) countVal.textContent = `${buildings.length} 棟`;
     if (popVal) popVal.textContent = `${this.buildingManager.getTotalPopulation()} 人`;
 
@@ -1492,9 +1675,31 @@ export class DevMenu {
               ? `<span style="color: #fbbf24;">建造中 (${Math.floor(b.constructionProgress * 100)}%)</span>`
               : `<span style="color: #4ade80;">入住 ${b.currentOccupants}/${b.registeredResidents}人</span>`;
 
+            let vehInfo = '';
+            if (b.vehicles && b.vehicles.length > 0) {
+              const vehSummary = b.vehicles.map((v, i) => {
+                const vSt = v.status === 'available'
+                  ? '<span style="color: #4ade80;">閒置可用</span>'
+                  : (v.status === 'in_use' ? `<span style="color: #fbbf24;">出行中(${v.currentDriverName || '市民'})</span>` : '<span style="color: #38bdf8;">遷入中</span>');
+                return `#${i + 1}[${v.sourceLabel}·${v.colorName}]: ${vSt}`;
+              }).join('； ');
+              vehInfo = `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">🚗 名下車輛 (${b.vehicles.length}輛): <span style="color: #cbd5e1;">${vehSummary}</span></div>`;
+            }
+
             let resInfo = '';
             if (b.residents && b.residents.length > 0) {
-              const resSummary = b.residents.map((r) => `${r.gender === 'male' ? '👨' : '👩'}${r.name}(${r.age}歲)`).join('、');
+              const resSummary = b.residents.map((r) => {
+                const icon = r.gender === 'male' ? '👨' : '👩';
+                let act = '在家';
+                if (r.currentActivity === 'AtWork') {
+                  act = '工廠上班中';
+                } else if (r.currentActivity === 'CommutingToWork') {
+                  act = r.currentTravelMode === 'drive' ? '開車通勤中' : '步行通勤中';
+                } else if (r.currentActivity === 'Traveling') {
+                  act = r.currentTravelMode === 'drive' ? '開車出行中' : '步行出行中';
+                }
+                return `${icon}${r.name}(${r.age}歲·${act})`;
+              }).join('、');
               resInfo = `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">👥 居民: <span style="color: #cbd5e1;">${resSummary}</span></div>`;
             }
 
@@ -1504,7 +1709,43 @@ export class DevMenu {
                   <span style="color: #f1f5f9; font-weight: 500;">${b.metadata.name} (${b.lot.frontageWidth}x${b.lot.lotDepth})</span>
                   ${st}
                 </div>
+                ${vehInfo}
                 ${resInfo}
+              </div>
+            `;
+          })
+          .join('');
+      }
+    }
+
+    // 渲染低密度工業區建築統計與清單
+    const indCountVal = this.panelContainer.querySelector('#dev-industrial-count-val');
+    const indCapVal = this.panelContainer.querySelector('#dev-industrial-cap-val');
+    const indListElem = this.panelContainer.querySelector('#dev-industrial-list');
+
+    const indBuildings = this.buildingManager.getIndustrialBuildings();
+    const indCap = this.buildingManager.getTotalIndustrialCapacity();
+
+    if (indCountVal) indCountVal.textContent = `${indBuildings.length} 棟`;
+    if (indCapVal) indCapVal.textContent = `${indCap.totalEmployed}/${indCap.totalCapacity} 人 (內部: ${indCap.currentWorkers}人)`;
+
+    if (indListElem) {
+      if (indBuildings.length === 0) {
+        indListElem.innerHTML = '暫無已建工業建築';
+      } else {
+        indListElem.innerHTML = indBuildings
+          .map((b) => {
+            const employed = b.employedWorkerIds ? b.employedWorkerIds.length : 0;
+            return `
+              <div style="padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="color: #fbbf24; font-weight: 500;">🏭 ${b.metadata.name} (${b.lot.frontageWidth}x${b.lot.lotDepth})</span>
+                  <span style="color: #38bdf8;">入職: ${employed}/${b.metadata.capacity}人 | 內部: ${b.currentOccupants}人</span>
+                </div>
+                <div style="font-size: 10px; color: #94a3b8; display: flex; justify-content: space-between; margin-top: 1px;">
+                  <span>坐標: (${b.lot.originZx}, ${b.lot.originZz}) · 朝向: ${b.facing}</span>
+                  <span style="color: ${employed > 0 ? '#4ade80' : '#fbbf24'};">● ${employed > 0 ? '運轉中' : '招募中'}</span>
+                </div>
               </div>
             `;
           })

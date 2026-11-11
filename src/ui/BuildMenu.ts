@@ -22,7 +22,7 @@ export class BuildMenu {
   private isTwoLaneSelected: boolean = false;
 
   private isZoningMenuOpen: boolean = false;
-  private currentZoningMode: 'Residential' | 'Dezone' = 'Residential';
+  private currentZoningMode: 'Residential' | 'Industrial' | 'Dezone' = 'Residential';
   private currentZoningToolMode: ZoningToolMode = 'brush';
 
   // DOM 參照 - 分類導航
@@ -39,6 +39,7 @@ export class BuildMenu {
   private brushModeTab!: HTMLButtonElement;
   private boxModeTab!: HTMLButtonElement;
   private residentialCard!: HTMLDivElement;
+  private industrialCard!: HTMLDivElement;
   private dezoneCard!: HTMLDivElement;
 
   // DOM 參照 - 說明氣泡
@@ -134,6 +135,12 @@ export class BuildMenu {
         background: rgba(34, 197, 94, 0.2);
         color: #4ade80;
         border-color: rgba(34, 197, 94, 0.4);
+      }
+
+      .build-instruction-pill .pill-badge.amber {
+        background: rgba(245, 158, 11, 0.2);
+        color: #fbbf24;
+        border-color: rgba(245, 158, 11, 0.4);
       }
 
       .build-instruction-pill .pill-badge.red {
@@ -249,6 +256,12 @@ export class BuildMenu {
         background: rgba(34, 197, 94, 0.2);
         border-color: #22c55e;
         box-shadow: 0 0 12px rgba(34, 197, 94, 0.3);
+      }
+
+      .build-item-card.selected.amber-card {
+        background: rgba(245, 158, 11, 0.2);
+        border-color: #f59e0b;
+        box-shadow: 0 0 12px rgba(245, 158, 11, 0.3);
       }
 
       .build-item-icon {
@@ -486,6 +499,23 @@ export class BuildMenu {
           </div>
         </div>
 
+        <!-- 工業區卡片 (琥珀黃色) -->
+        <div class="build-item-card zoning-card industrial-card amber-card">
+          <div class="build-item-icon" style="background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.35);">
+            <!-- 工業區工廠圖標 (琥珀黃色) -->
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 20h20"/>
+              <path d="M5 20V8l5 4V8l5 4V4h5v16"/>
+            </svg>
+          </div>
+          <div class="build-item-details">
+            <span class="build-item-name" style="color: #fbbf24;">低密度工業區</span>
+            <div class="build-item-meta">
+              <span class="zoning-desc">點選或拖曳劃分 · 琥珀黃</span>
+            </div>
+          </div>
+        </div>
+
         <!-- 清除分區卡片 -->
         <div class="build-item-card zoning-card dezone-card">
           <div class="build-item-icon" style="background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.35);">
@@ -589,6 +619,7 @@ export class BuildMenu {
     this.brushModeTab = this.container.querySelector('.brush-mode-tab') as HTMLButtonElement;
     this.boxModeTab = this.container.querySelector('.box-mode-tab') as HTMLButtonElement;
     this.residentialCard = this.container.querySelector('.residential-card') as HTMLDivElement;
+    this.industrialCard = this.container.querySelector('.industrial-card') as HTMLDivElement;
     this.dezoneCard = this.container.querySelector('.dezone-card') as HTMLDivElement;
 
     this.roadSubMenuPanel = this.container.querySelector('.road-submenu-panel') as HTMLDivElement;
@@ -630,6 +661,11 @@ export class BuildMenu {
     // 3. 點擊「住宅區」分區卡片
     this.residentialCard.addEventListener('click', () => {
       this.setZoningMode('Residential');
+    });
+
+    // 3.1 點擊「低密度工業區」分區卡片
+    this.industrialCard.addEventListener('click', () => {
+      this.setZoningMode('Industrial');
     });
 
     // 4. 點擊「清除劃分」卡片
@@ -716,7 +752,7 @@ export class BuildMenu {
 
   // --- 土地劃分控制邏輯 ---
 
-  private openZoningTool(mode: 'Residential' | 'Dezone'): void {
+  private openZoningTool(mode: 'Residential' | 'Industrial' | 'Dezone'): void {
     this.isZoningMenuOpen = true;
     this.currentZoningMode = mode;
     this.zoningManager.setToolActive(true, mode);
@@ -730,7 +766,7 @@ export class BuildMenu {
     this.updateZoningUI();
   }
 
-  private setZoningMode(mode: 'Residential' | 'Dezone'): void {
+  private setZoningMode(mode: 'Residential' | 'Industrial' | 'Dezone'): void {
     this.currentZoningMode = mode;
     this.zoningManager.setZoneMode(mode);
     this.updateZoningUI();
@@ -757,6 +793,18 @@ export class BuildMenu {
       if (previewInfo.mode === 'Residential') {
         this.instructionBadgeSpan.className = 'pill-badge green';
         this.instructionBadgeSpan.textContent = '住宅區框選中';
+        if (previewInfo.cellCount > 0) {
+          this.instructionTextSpan.innerHTML = `
+            正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（<span class="pill-cost-highlight">${previewInfo.cellCount} 格路側分區</span>）· 放開滑鼠以指派用途 · 右鍵取消
+          `;
+        } else {
+          this.instructionTextSpan.innerHTML = `
+            正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（<span class="pill-cost-invalid">無路側分區格位</span>）· 右鍵取消
+          `;
+        }
+      } else if (previewInfo.mode === 'Industrial') {
+        this.instructionBadgeSpan.className = 'pill-badge amber';
+        this.instructionBadgeSpan.textContent = '工業區框選中';
         if (previewInfo.cellCount > 0) {
           this.instructionTextSpan.innerHTML = `
             正在框選：${previewInfo.widthCells} × ${previewInfo.depthCells} 格（<span class="pill-cost-highlight">${previewInfo.cellCount} 格路側分區</span>）· 放開滑鼠以指派用途 · 右鍵取消
@@ -796,6 +844,11 @@ export class BuildMenu {
         this.instructionBadgeSpan.textContent = '住宅區框選';
         this.instructionTextSpan.textContent =
           '按住滑鼠左鍵拖曳拉出矩形，放開即可批次指定【住宅區】 · 右鍵取消 · ESC 退出';
+      } else if (this.currentZoningMode === 'Industrial') {
+        this.instructionBadgeSpan.className = 'pill-badge amber';
+        this.instructionBadgeSpan.textContent = '工業區框選';
+        this.instructionTextSpan.textContent =
+          '按住滑鼠左鍵拖曳拉出矩形，放開即可批次指定【低密度工業區】 · 右鍵取消 · ESC 退出';
       } else {
         this.instructionBadgeSpan.className = 'pill-badge red';
         this.instructionBadgeSpan.textContent = '框選清除';
@@ -808,6 +861,11 @@ export class BuildMenu {
         this.instructionBadgeSpan.textContent = '住宅區劃分';
         this.instructionTextSpan.textContent =
           '滑鼠左鍵點選或拖曳指派【綠色住宅區】 · 右鍵塗抹清除 · ESC 退出';
+      } else if (this.currentZoningMode === 'Industrial') {
+        this.instructionBadgeSpan.className = 'pill-badge amber';
+        this.instructionBadgeSpan.textContent = '工業區劃分';
+        this.instructionTextSpan.textContent =
+          '滑鼠左鍵點選或拖曳指派【琥珀黃低密度工業區】 · 右鍵塗抹清除 · ESC 退出';
       } else {
         this.instructionBadgeSpan.className = 'pill-badge red';
         this.instructionBadgeSpan.textContent = '清除分區';
@@ -829,22 +887,31 @@ export class BuildMenu {
 
       // 更新卡片說明文字
       const resMetaDesc = this.residentialCard.querySelector('.zoning-desc');
+      const indMetaDesc = this.industrialCard.querySelector('.zoning-desc');
       const dezoneMetaDesc = this.dezoneCard.querySelector('.zoning-desc');
 
       if (this.currentZoningToolMode === 'box') {
         if (resMetaDesc) resMetaDesc.textContent = '拖曳矩形框選批次指定 · 綠色';
+        if (indMetaDesc) indMetaDesc.textContent = '拖曳矩形框選批次指定 · 琥珀黃';
         if (dezoneMetaDesc) dezoneMetaDesc.textContent = '拖曳矩形框選批次清除';
       } else {
         if (resMetaDesc) resMetaDesc.textContent = '點選或拖曳劃分 · 綠色';
+        if (indMetaDesc) indMetaDesc.textContent = '點選或拖曳劃分 · 琥珀黃';
         if (dezoneMetaDesc) dezoneMetaDesc.textContent = '右鍵或點此塗抹清除';
       }
 
       // 卡片選取高亮狀態
       if (this.currentZoningMode === 'Residential') {
         this.residentialCard.classList.add('selected', 'green-card');
+        this.industrialCard.classList.remove('selected', 'amber-card');
+        this.dezoneCard.classList.remove('selected');
+      } else if (this.currentZoningMode === 'Industrial') {
+        this.residentialCard.classList.remove('selected', 'green-card');
+        this.industrialCard.classList.add('selected', 'amber-card');
         this.dezoneCard.classList.remove('selected');
       } else {
         this.residentialCard.classList.remove('selected', 'green-card');
+        this.industrialCard.classList.remove('selected', 'amber-card');
         this.dezoneCard.classList.add('selected');
       }
 

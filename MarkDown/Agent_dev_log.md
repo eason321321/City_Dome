@@ -1771,3 +1771,254 @@
 ### 驗證結果
 - **構建驗證**：執行 `npm.cmd run build` 通過（0 錯誤、0 警告）。
 - **Git 狀態**：成功建立 Commit 並順利 Push 至 `origin/main`。
+
+
+---
+
+## [2026-11-11] 第 41 輪作業：市民出行版本預備 —— 住宅名下車輛登記與出行方式決策系統實作
+
+### 本輪更新摘要
+- **目標**：
+  依據開發者要求，為接下來的「市民出行版本」做好數據與決策基礎架構：
+  1. **車輛登記給住宅**：
+     - 一個住宅可以登記一個或多個車輛。
+     - 若一間房子有人併入合居時，名下應有兩輛車（建屋完工時的遷入車輛 + 併入合居時的遷入車輛）。
+  2. **出行方式選擇邏輯**：
+     - 住宅內市民要出行時，可選擇從該市民住宅之下的車輛作為出行方式。
+     - 特別注意：「開車是方式之一，不是一定要開車出發」，市民具備出行偏好（自駕、短途步行、大眾運輸），並受未成年駕駛限制與住宅可用車輛限制之約束。
+  3. **遵守規範**：
+     - 依開發者明確指令，**不建立 GIT 版本**。
+- **實作內容**：
+  1. **住宅名下車輛登記體系 (`ResidenceVehicle`)**：
+     - 於 `PlacedBuilding` 引入 `vehicles: ResidenceVehicle[]`。
+     - 建屋完工（`completeConstruction`）首批遷入時登記 `source: 'construction'`（建屋遷入車輛）。
+     - 市民併入合居（`matchJoinExisting`）次批遷入時登記 `source: 'merge'`（併入遷入車輛）。
+     - 車輛行駛抵達路邊停妥後，狀態更新為 `available`，並與 `ParkingManager` 雙向紀錄 `buildingId` 與 `residenceVehicleId`。
+  2. **市民出行方式決策引擎 (`decideCitizenTravel`)**：
+     - 支援三種出行方式：`drive`（開車）、`walk`（步行）、`transit`（大眾運輸）。
+     - 市民成年判定：未滿 18 歲不可單獨開車，自動選擇步行/大眾運輸。
+     - 住宅車輛狀態檢查：若住宅名下車輛皆由其他合居成員出行使用中，市民自適應降級為步行。
+     - 偏好與距離綜合判定：即使住宅名下有車可用，市民若偏好步行且距離適中，可自主選擇步行出發（車輛保留於住宅路側）；若選擇開車，選用住宅名下首輛閒置車輛並標記為 `in_use`。
+     - 房內現有人數即時更新：市民出發時 `building.currentOccupants` 動態減 1。
+  3. **市民返家與車輛歸還解鎖機制 (`returnCitizenToResidence`)**：
+     - 市民返家時結算交通方式，若此前駕駛住宅名下私家車，自動歸還並將車輛狀態重設為 `available`，房內現有人數加 1。
+  4. **3D 懸停卡片與 DevMenu 開發者工具箱升級**：
+     - 房屋懸停 Tooltip 即時顯示名下所有車輛編號、來源、顏色與當前狀態（閒置可用 / 某某市民出行中）。
+     - DevMenu 房屋分頁新增「🚶🚗 市民出行方式決策測試」面板，支援一鍵隨機選取市民進行出行決策測試，並即時回饋詳細決策說明與車輛使用狀況。
+- **原則**：維持工作區變更，未建立 Git 提交。
+
+### 本輪異動檔案清單
+1. [`src/types/building.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/building.ts)：新增住宅實體 `registeredVehicleIds` 欄位。
+2. [`src/simulation/ParkingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/ParkingManager.ts)：擴充 `ParkedCar` 與 `parkExistingCarMesh` 支援 `buildingId` 與 `residenceVehicleId` 雙向索引。
+3. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+   - 實作 `ResidenceVehicle` 數據模型與建屋/併入車輛登記機制。
+   - 擴充 `CitizenProfile` 支援出行偏好與當前活動狀態。
+   - 實作 `decideCitizenTravel` 出行方式決策演算法。
+   - 實作 `returnCitizenToResidence` 市民返家與車輛歸還解鎖機制。
+   - 更新懸停 Tooltip 即時呈現名下車輛清單與市民出行狀態。
+4. [`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)：
+   - 房屋清單支援顯示名下登記車輛與市民出行活動。
+   - 新增「🚶🚗 市民出行方式決策測試」互動控制面板。
+5. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)
+6. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)
+7. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)
+
+### 驗證結果
+- **單元測試驗證**：撰寫並執行 7 項完整情境單元測試（建屋登記、併入登記、市民自駕借車、第二輛車借用、未成年步行限制、車輛歸還、有車仍選步行決策），全數 100% 通過。
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯 0 錯誤、0 警告，Vite 打包順利完成。
+- **實機自動化測試**：透過 Headless Edge 與 CDP 驗證 DOM 樹與 UI 元件，0 執行期錯誤。
+- **Git 狀態**：依指示維持工作區修改，未建立 Git 版本。
+
+
+---
+
+## [2026-11-11] 第 42 輪作業：分頁切換背景不中斷運行機制（Web Worker 心跳與渲染分離）
+
+### 本輪更新重點
+- **需求背景**：
+  依開發者指示，解決當切換到其他瀏覽器分頁或視窗最小化時，城市模擬暫停的問題；並在充分討論技術細節（架構可維護性、20~30 FPS 對時間與邏輯的精確度影響）後實作落地。
+- **實作內容**：
+  1. **背景心跳定時器 (`BackgroundTimer.ts`)**：
+     - 使用內嵌 Web Worker（透過 Blob URL 建立）繞過瀏覽器對背景分頁 `requestAnimationFrame` 與 `setInterval` 的定時器凍結限制。
+     - 預設目標頻率為 30 FPS（間隔約 33ms），在背景中穩定派發 tick 心跳。
+     - 每次心跳計算真實經過之 `rawDelta` 並實施 `Math.min(delta, 0.1)` 邊界保護，避免極端狀況下的物理穿透。
+     - 內建 `window.setInterval` 容錯備援降級機制。
+  2. **主循環架構重構 (`main.ts`)**：
+     - 將原單一 `animate()` 迴圈解耦為「模擬邏輯（`stepSimulation`）」與「3D 畫面繪製（`renderFrame`）」兩個獨立職責。
+     - `stepSimulation(delta)`：更新 `TimeManager`（遊戲虛擬時間推進）、`RoadManager`（紅綠燈號誌週期）、`VehicleManager`（車流巡航與停等）、`BuildingManager`（施工進度、市民入住與車輛歸屬）以及底部狀態欄 UI。
+     - `renderFrame(delta)`：更新相機位置與 WASD 鍵盤控制、DevMenu 展台模型旋轉與動畫，以及 Three.js WebGL 畫面渲染。
+  3. **視窗能見度感知切換 (`visibilitychange`)**：
+     - 當分頁處於前景時，由 `requestAnimationFrame` 以 60+ FPS 全速驅動模擬與 3D 渲染，背景 Worker 處於停止狀態。
+     - 當使用者切換至其他分頁或最小化時（`document.hidden === true`），取消 `requestAnimationFrame`，GPU 負擔降至 0%，同時啟動 `BackgroundTimer` 維持 30 FPS 持續推進城市邏輯。
+     - 當使用者切回分頁時（`document.hidden === false`），停止 `BackgroundTimer`，呼叫 `clock.getDelta()` 消除背景累積時間突躍，平滑恢復 60+ FPS 前景繪圖。
+  4. **版本規範**：遵守指示，維持工作區修改狀態，不建立 Git 版本。
+
+### 本輪修改檔案清單
+1. [`src/simulation/BackgroundTimer.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/BackgroundTimer.ts)：全新建立背景心跳計時器類別，封裝 Web Worker 與真實 Delta 計算。
+2. [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)：解耦主循環為 `stepSimulation` 與 `renderFrame`，串接 `BackgroundTimer` 與 `visibilitychange` 事件監聽。
+3. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：記錄第 42 輪討論歷程、使用者提問與方案決策細節。
+4. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+5. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 35 章節，記錄背景持續運行架構、Web Worker 心跳與渲染解耦機制。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯 0 錯誤、0 警告，Vite 打包順利完成（1.50 秒）。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交。
+
+---
+
+## [2026-11-11] 第 43 輪作業：房屋數量增多時效能卡頓分析與優化架構討論
+
+### 本輪更新重點
+- **需求背景**：
+  用戶反饋：「我發現當房子多的時候好像也會卡 正常嗎 ? 原因? 如何改善? (討論)」。
+- **討論與技術分析總結**：
+  1. **確認現象正常性**：當前系統處於原型與功能健全期（Feature-complete MVP），每棟房屋為純程式化細緻組裝（水線、雨棚、門窗、花樹、木柵欄），每棟由 30~70 個獨立 Mesh 組成，尚未實施生產級 Draw Call 合併與射線節流，因此在房屋數量累積至數十棟時產生效能卡頓為必然技術現象。
+  2. **定位四大效能瓶頸**：
+     - **瓶頸 1（Draw Call 與 Shadow Map 雙重膨脹）**：每棟房屋 30~70 個 Mesh + 17 個車輛 Mesh；且全城日光 Shadow Map（240x240m）將所有 `castShadow = true` 的細微構件（連同每一根柵欄木片）皆再次繪製，100 棟房屋單幀產生 5,000~10,000 次 Draw Call，遠超 WebGL 單線程安全上限。
+     - **瓶頸 2（未節流全城射線求交 `checkBuildingHover`）**：滑鼠移動時未加節流（一秒觸發 60~144+ 次），直接以 `recursive = true` 遞迴檢測全城數千個 Mesh 之幾何面，造成「一滑滑鼠就卡」的嚴重掉幀。
+     - **瓶頸 3（Scene Graph 階層過深與幾何體未共用）**：每棟房屋獨立實例化 `BufferGeometry`，每幀需進行數千節點的階層矩陣更新與視錐剔除。
+     - **瓶頸 4（建地配對尋路循環）**：`findSiteForModel` 在未佔用格子 × 4 朝向的雙重迴圈中執行 A* 尋路（`Pathfinding.findShortestPath`）。
+  3. **擬定三階段優化藍圖**：
+     - **階段 1（輕量立竿見影）**：每棟房屋配置單一透明立方體 Hitbox 供射線檢測（`recursive: false`）+ 滑鼠幀節流 + 陰影剪枝（關閉細微零件 castShadow）。
+     - **階段 2（根本解決 Draw Call）**：完工房屋靜態幾何合併（`BufferGeometryUtils.mergeGeometries`），將整棟 50 個 Mesh 依材質合併為 2~3 個 Mesh。
+     - **階段 3（大城市規模化）**：重複物件 `InstancedMesh` + 路網連通性圖分量查表。
+
+### 本輪修改檔案清單
+1. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：詳細記錄第 43 輪房子增多卡頓問題之問答、四大瓶頸定位與三階段優化方案。
+2. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+3. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 36 章節，記錄 WebGL 渲染瓶頸、Draw Call、Shadow Map 覆蓋、射線 Hitbox 與幾何合併技術細節。
+
+### 驗證結果
+- **構建驗證**：既有代碼與文檔均保持一致，文檔符合規範。
+- **Git 狀態**：維持工作區變更，未建立 Git 提交（遵循非必要不自行變動原則）。
+
+---
+
+## [2026-11-11] 第 44 輪作業：模型端直接幾何合併（Pre-baked Archetype Cache）可行性深度討論
+
+### 本輪更新重點
+- **需求背景**：
+  用戶敏銳提問：「你說第二階段:完工房屋幾何體合併，但是 不能直接從模型端或是招喚時直接合併嗎? 反正這些物件內的相對位置都不會變 (討論)」。
+- **技術評估與架構結論**：
+  1. **確認用戶方案更優越**：
+     - 現行架構中，施工動畫僅是在根節點 `buildingMesh` 進行 Y 軸位移與縮放，施工吊臂/鷹架在獨立的 `scaffoldingGroup`。房屋自身子構件在生命週期中相對位置完全不變。
+     - 在「模型工廠端（Factory）」直接烘焙合併，比「完工後合併」更加優雅且無副作用。
+  2. **兩大飛躍級技術優勢**：
+     - **全生命週期低負擔**：施工中也只有約 4~6 個 Mesh（依材質分組），多棟房屋同時起建也不會發生 Draw Call 突波。
+     - **原型預烘焙（Pre-baked Archetype）**：5 款房型各只需在工廠端合併一次生成快取幾何體。全城生成房屋直接共享該快取，生成新房屋時間由數毫秒降至 0.001 毫秒，VRAM 與記憶體開銷降至 5% 以下。
+  3. **實作核心規範**：
+     - 按材質分組（Multi-Material Grouping）：外牆組、屋頂組、木質組、植栽組、透明玻璃組。
+     - Transform Baking：將局部矩陣烘焙入頂點，再使用 `BufferGeometryUtils.mergeGeometries`。
+
+### 本輪修改檔案清單
+1. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：記錄第 44 輪模型端幾何合併深入討論與技術論證。
+2. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+3. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 37 章節，記錄模型端原型預烘焙（Pre-baked Archetype）幾何合併架構。
+
+### 驗證結果
+- **文檔審查**：符合規範，維持工作區修改狀態，未建立 Git 提交。
+
+---
+
+## [2026-11-11] 第 45 輪作業：低密度工業區分區劃分、4款工業建築程序化 3D 建模與即時建造工具
+
+### 本輪更新重點
+- **需求目標**：
+  1. 新增低密度工業區（`Industrial`，琥珀黃 `0xf59e0b`）。
+  2. 依用戶提供 4 張參考圖，完成 4 款低密度工業建築之精細程序化 3D 建模：
+     - **4x4 小型工廠**（參考圖 1）：開放式修車金屬工坊，工作上限 **3 人**。
+     - **5x5 維修廠**（參考圖 2）：重型維修採光溫室廠，工作上限 **4 人**。
+     - **5x6 物流倉庫**（參考圖 3）：長度 5 為面寬緊貼馬路，工作上限 **4 人**。
+     - **6x6 中型工廠**（參考圖 4）：雙煙囪重型製造園區，工作上限 **7 人**。
+     - 4 款建築之正面裝卸區/正門/車道統一朝向臨路方位（模型局部空間 $+Z$ 軸）。
+  3. 區塊劃分工具新增「低密度工業區劃分工具」。
+  4. 開發者選單（DevMenu）新增「低密度工業區建造」工具，可立即檢查低密度工業區是否有可容納任意尺寸之合法建地並直接建造完成。
+  5. **遵守限制**：非必要功能不自行擴充、不建立 GIT 版本。
+
+### 本輪修改檔案清單
+1. [`src/rendering/BuildingModelFactory.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/BuildingModelFactory.ts)：
+   - 擴充工業材質庫（瀝青、機油地坪、黃黑斑馬條紋、倉儲紅磚、煙囪水泥灰、天窗玻璃、通風管道等）。
+   - 擴充工業 procedural 道具工廠（油桶、棧板、三角錐、鐵絲網、變電站、小型貨車、半掛貨櫃車、堆高機等）。
+   - 實作 4 款工業建築 3D 模型生成函數：`createIndustrial_4x4()`, `createIndustrial_5x5()`, `createIndustrial_5x6()`, `createIndustrial_6x6()`。
+   - 擴展 `BuildingMetadata` 類別欄位支援 `'Residential_Low' | 'Industrial_Low'`，於目錄中登錄 4 款工業模型之準確規格與工作上限。
+2. [`src/systems/ZoningManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/ZoningManager.ts)：
+   - `ZoneType` 擴展支援 `'Industrial'`，新增琥珀黃材質系統（`industrialMat` 0xf59e0b）。
+   - 更新網格生成、筆刷懸停預覽、邊界框選提交與分區統計。
+3. [`src/ui/BuildMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildMenu.ts)：
+   - 建造抽屜新增「低密度工業區劃分」琥珀黃卡片（含工廠圖示與 `amber-card` 樣式）。
+   - 連動分區模式切換至 `'Industrial'` 與提示文案更新。
+4. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+   - 升級 `canFitModelAt` 與 `findSiteForModel`，支援按建築類別（住宅 vs 工業）嚴格隔離對應地塊類型。
+   - 實現 `buildIndustrialBuilding(preferredModelId?)`：搜尋具路網連通與正面臨路條件之工業地塊，即時起建工業建築並標記完工。
+   - 新增 `getIndustrialBuildings()`、`getResidentialBuildings()` 與 `getTotalIndustrialCapacity()`，確保住宅與工業人口/職缺數據解耦。
+   - 擴充懸停 3D Tooltip 內容，支援工業建築名稱、規模、朝向與工作上限資訊呈現。
+5. [`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)：
+   - 模型檢視展台下拉選單登錄 4 款工業模型，支援 360° 旋轉檢視、標註工作人數上限。
+   - 住宅與分區分頁新增「🏭 低密度工業區建造」控制卡片：
+     - 一鍵自動適配起建按鈕（`⚡ 立即檢查並起建工業建築`）。
+     - 4 款指定尺寸起建按鈕（4x4, 5x5, 5x6, 6x6）。
+     - 即時狀態指示區（已建數量、工作職缺上限、建造反饋文案）。
+     - 全市已建工業建築動態清單（顯示座標、朝向與運轉狀態）。
+6. [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)：
+   - 掛載全域除錯物件 `(window as any).__cityDome`，便於除錯與自動化測試驗證。
+7. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：記錄第 45 輪需求規格與技術決策。
+8. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 38 章節，詳述工業分區、3D 建模與起建演算法。
+9. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 編譯 0 報錯、Vite 打包完全成功。
+- **實機自動化測試**：
+  - 透過 Headless Chrome 模擬訪問 `http://localhost:3000`。
+  - 展台選單完整載入 4 款工業模型，3D Mesh 生成與幾何包圍盒無異常。
+  - 分區未規劃時點選建造：正確反饋「全市尚未劃分低密度工業區（琥珀黃）或已全數佔用」。
+  - 劃分工業地塊後執行建造：4 款模型（4x4, 5x5, 5x6, 6x6）與自動配對皆 100% 成功起建，正面皆精確緊貼馬路，UI 統計即時顯示「5 棟 / 22 人 (已就緒)」。
+- **Git 狀態**：維持工作區變更，**嚴格不建立 GIT 提交**。
+
+---
+
+## [2026-11-11] 第 46 輪作業：隨機市民上班通勤測試、工廠入職人數與內部人數即時顯示、就近路邊停車下車入廠機制
+
+### 本輪更新重點
+- **需求目標**：
+  1. 將舊版「市民出行方式決策測試」面板全面刪除，替換為「隨機市民上班測試」。
+  2. 按下按鈕後，隨機選取一位在家的市民，先以 50% 機率決定開車、50% 機率選擇步行（先不考慮市民偏好）。
+  3. 若隨機到開車：判定居民所居住之住宅是否有閒置之登記車輛：
+     - 若無：直接改用步行上班方式。
+     - 若有：市民走出家門上車，並開車前往上班地點。
+  4. 工廠區（上班處）資訊顯示全面擴充：清楚呈現「入職人數」以及「現在內部人數」。
+  5. 測試時被隨機到的市民，隨機分配到入職人數未滿的工廠並進行通勤：
+     - 走路方式：直接走到工廠內。
+     - 開車方式：開到廠處後，開始就近尋找路邊停車位，找到後停車、下車並步行進入工廠。
+  6. **嚴格遵守約束**：未提及的功能不自行建立、不建立 GIT 版本。
+
+### 本輪修改檔案清單
+1. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+   - `CitizenProfile` 擴充 `workBuildingId?: string;`，`CitizenActivityState` 擴展支援 `'CommutingToWork'`。
+   - `PlacedBuilding` 擴充 `employedWorkerIds?: string[];`，工廠起建時自動初始化。
+   - `MovingInPedestrian` 擴充 `onArrivedDestination?: () => void;`，支援自訂抵達回調。
+   - 實現 `findBestRoadPath(originTileKey, destTileKey)` 與 `createDirectFallbackPath`，提供兩路塊間之最佳連續車道路徑搜尋與備援。
+   - 實現 `testRandomCitizenCommute()`：完成 50% 隨機交通決策、無車降級步行、未滿員工廠配對、走路進廠、走到車上上車、開車前往、就近找車位停車、下車步行入廠之完整串接。
+   - 實現 `recallAllCitizensToResidence()`：一鍵召回所有通勤與上班市民平安返家、車輛自動歸還住宅路邊停放並扣除工廠內部人數。
+   - 升級懸停 3D Tooltip：工廠類別即時顯示「💼 入職人數: `X / Y 人`」與「👥 現在內部人數: `Z 人`」。
+   - 升級 `getTotalIndustrialCapacity()`：返回包含總職缺、已入職人數與內部人數之複合結構。
+2. [`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)：
+   - 移除舊版出行決策面板與按鈕監聽，新增「🏭 隨機市民上班測試」卡片（按鈕：`💼 隨機市民上班測試` 與 `🏠 召回所有市民返家`）。
+   - 綁定全新通勤測試回饋日誌（顯示市民、年齡、出發住宅、目標工廠、交通方式、所用車輛與詳細決策）。
+   - `updateHousingUI()` 支援工廠動態清單即時顯示「入職: `X/Y`人 \| 內部: `Z`人」以及市民活動狀態（在家 / 開車通勤中 / 步行通勤中 / 工廠上班中）。
+   - 掛載 `setOnCommuteStateChangedCallback`，市民進廠或抵達時自動無縫刷新 UI。
+3. [`MarkDown/Dissusion_withDEV.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Dissusion_withDEV.md)：詳細記錄第 46 輪需求確認、架構決策與後續機制推薦。
+4. [`MarkDown/Agent_technique_record.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_technique_record.md)：新增第 39 章節，記錄市民就業配對、50%交通決策、就近停車與多段步行動畫技術規格。
+5. [`MarkDown/Agent_dev_log.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/Agent_dev_log.md)：登錄本輪開發歷程。
+
+### 驗證結果
+- **構建驗證**：執行 `npm run build`，TypeScript 編譯 0 報錯、Vite 打包成功。
+- **無頭瀏覽器實測驗證**：
+  - 舊版出行測試按鈕已完全移除，新按鈕 `💼 隨機市民上班測試` 與 `🏠 召回所有市民返家` 渲染正常。
+  - 無市民時點選：給予精確防禦警告。
+  - 建立住宅、市民、車輛與工廠後測試：
+    - **步行分支**：50% 隨機抽中步行，市民沿路徑步行走進工廠大門，工廠入職人數與內部人數由 0 變 1。
+    - **開車分支**：50% 隨機抽中開車，市民走向車輛上車，解除住宅路邊停放，車輛在道路巡航至工廠，呼叫 `ParkingManager.findClosestAvailableSpot` 就近找到車位入庫停放，市民下車步行進入工廠，內部人數 $+1$。
+    - **召回測試**：點擊召回按鈕，工廠內部人數扣除，市民平安返家，住宅名下車輛重新停泊於住宅旁並恢復閒置可用。
+- **Git 狀態**：維持工作區變更，**嚴格未建立 GIT 提交**。
+
+

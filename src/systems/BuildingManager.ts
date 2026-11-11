@@ -1,11 +1,34 @@
 import * as THREE from 'three';
 import { BuildingModelFactory, BuildingMetadata } from '../rendering/BuildingModelFactory';
-import { ZoningManager } from './ZoningManager';
+import { ZoningManager, ZoneType } from './ZoningManager';
 import { RoadNetwork } from './RoadNetwork';
-import { Pathfinding, PathResult } from './Pathfinding';
+import { Pathfinding, PathResult, RouteWaypoint } from './Pathfinding';
 import { VehicleManager } from '../simulation/VehicleManager';
 import { ParkingManager, CurbsideSpot } from '../simulation/ParkingManager';
 import { CitizenModelFactory } from '../rendering/CitizenModelFactory';
+import { VehicleModelFactory } from '../rendering/VehicleModelFactory';
+
+export type VehicleMoveInSource = 'construction' | 'merge';
+export type VehicleStatus = 'available' | 'in_use' | 'en_route_move_in';
+export type TravelMode = 'drive' | 'walk' | 'transit';
+export type TransitPreference = 'DriveOnly' | 'PreferTransit' | 'WalkIfClose';
+export type CitizenActivityState = 'AtHome' | 'Traveling' | 'CommutingToWork' | 'AtWork' | 'Leisure';
+
+export interface ResidenceVehicle {
+  id: string;                         // 車輛唯一識別碼 (例: veh_bld_1_1)
+  buildingId: string;                 // 所屬住宅建築 ID
+  source: VehicleMoveInSource;        // 來源：'construction' (建屋遷入) | 'merge' (併入遷入)
+  sourceLabel: string;                // 易讀標籤：'建屋遷入' | '併入遷入'
+  color: number;                      // 車身烤漆顏色 HEX
+  colorName: string;                  // 車身顏色名稱 (例: '蔚藍色', '曜石黑')
+  status: VehicleStatus;              // 'available' (住宅可用) | 'in_use' (市民出行中) | 'en_route_move_in' (初次遷入在途)
+  parkedCarId?: string;               // 停放在 ParkingManager 中的 ParkedCar ID
+  parkedSpot?: CurbsideSpot;          // 停放的路側位置
+  currentDriverCitizenId?: string;    // 當前借出駕駛的市民 ID
+  currentDriverName?: string;         // 當前借出駕駛的市民姓名
+  mesh?: THREE.Group;                 // 3D 模型實體參照
+  registeredAt: number;               // 登記時間戳記
+}
 
 export interface CitizenProfile {
   id: string;
@@ -13,6 +36,34 @@ export interface CitizenProfile {
   gender: 'male' | 'female';
   age: number;
   homeBuildingId: string;
+  workBuildingId?: string;               // 若已入職，其工作場所工廠之建築 ID
+  transitPreference: TransitPreference;  // 通勤出行偏好
+  currentActivity: CitizenActivityState; // 當前活動狀態 (預設 'AtHome')
+  currentVehicleId?: string;            // 若當前出行駕駛中，所使用之住宅車輛 ID
+  currentTravelMode?: TravelMode;       // 當前出行交通方式 ('drive' | 'walk' | 'transit')
+}
+
+export interface TravelDecisionOptions {
+  destination?: THREE.Vector3;
+  distanceMeters?: number;           // 預計出行距離 (米)
+  purpose?: string;                  // 出行目的 (如 '上班', '休閒購物')
+  forceMode?: TravelMode;            // 強制指定方式 (供測試與控制)
+}
+
+export interface TravelDecisionResult {
+  success: boolean;
+  citizenId: string;
+  citizenName: string;
+  citizenAge: number;
+  buildingId: string;
+  buildingName: string;
+  selectedMode: TravelMode;          // 最終決策之出行方式
+  selectedVehicle?: ResidenceVehicle;// 若選擇開車，所使用的住宅名下車輛
+  canDrive: boolean;                 // 是否具備開車資格 (年齡 >= 18 且住宅名下有閒置車輛)
+  availableVehiclesCount: number;    // 住宅名下目前可用車輛數
+  totalVehiclesCount: number;        // 住宅名下總登記車輛數
+  reason: string;                    // 決策詳細原因說明
+  timestamp: number;
 }
 
 export interface PlacedBuilding {
@@ -37,10 +88,12 @@ export interface PlacedBuilding {
   constructionProgress: number;     // 0.0 ~ 1.0
   constructionDuration: number;     // 建造總秒數 (以遊戲模擬時間計)
   registeredResidents: number;      // 登記居住人數
-  currentOccupants: number;         // 當前房內人數
+  currentOccupants: number;         // 當前房內/廠內人數
+  employedWorkerIds?: string[];     // 工廠入職市民 ID 清單 (入職人數 = employedWorkerIds.length)
   isCoLiving: boolean;              // 是否合居 (true: 與人合居, false: 自己住)
   moveInStatus: 'none' | 'enRoute' | 'arrived' | 'waitingForRoad';
   residents: CitizenProfile[];      // 入住市民詳細個資清單
+  vehicles: ResidenceVehicle[];     // 登記於此住宅之名下車輛清單 (建屋遷入與併入遷入)
   // 施工吊臂作業相關動畫元件參照
   craneRefs?: {
     slewArm: THREE.Group;
@@ -67,6 +120,7 @@ export interface MovingInPedestrian {
   walkTimer: number;
   isAlighted: boolean;
   hasEnteredHouse: boolean;
+  onArrivedDestination?: () => void;
 }
 
 export type HousingDensity = 'Low' | 'Medium' | 'High';
@@ -309,8 +363,8 @@ export class BuildingManager {
       demand,
     };
 
-    // 房屋已完工，立即派遣市民開車自邊界公路前往家門，車到消失時正式增加入住人數
-    this.dispatchCitizenVehicle(chosenBuilding, demand.peopleCount);
+    // 房屋已完工，立即派遣市民開車自邊界公路前往家門，車到消失時正式增加入住人數 (來源：併入遷入)
+    this.dispatchCitizenVehicle(chosenBuilding, demand.peopleCount, 'merge');
   }
 
   /**
@@ -425,9 +479,11 @@ export class BuildingManager {
     }[] = [];
 
     const facings: ('N' | 'S' | 'E' | 'W')[] = ['N', 'S', 'E', 'W'];
+    const targetZoneType: ZoneType =
+      meta.category === 'Industrial_Low' ? 'Industrial' : 'Residential';
 
     for (const cell of cells.values()) {
-      if (cell.zoneType !== 'Residential' || this.occupiedCells.has(cell.key)) {
+      if (cell.zoneType !== targetZoneType || this.occupiedCells.has(cell.key)) {
         continue;
       }
 
@@ -505,6 +561,8 @@ export class BuildingManager {
     const W = meta.frontageWidth;
     const D = meta.lotDepth;
     const cs = this.CELL_SIZE;
+    const targetZoneType: ZoneType =
+      meta.category === 'Industrial_Low' ? 'Industrial' : 'Residential';
 
     switch (facing) {
       case 'S': {
@@ -517,7 +575,7 @@ export class BuildingManager {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
             const c = this.zoningManager.getCell(key);
-            if (!c || c.zoneType !== 'Residential') return false;
+            if (!c || c.zoneType !== targetZoneType) return false;
           }
         }
         return true;
@@ -533,7 +591,7 @@ export class BuildingManager {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
             const c = this.zoningManager.getCell(key);
-            if (!c || c.zoneType !== 'Residential') return false;
+            if (!c || c.zoneType !== targetZoneType) return false;
           }
         }
         return true;
@@ -549,7 +607,7 @@ export class BuildingManager {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
             const c = this.zoningManager.getCell(key);
-            if (!c || c.zoneType !== 'Residential') return false;
+            if (!c || c.zoneType !== targetZoneType) return false;
           }
         }
         return true;
@@ -565,7 +623,7 @@ export class BuildingManager {
             const key = `${x},${z}`;
             if (this.occupiedCells.has(key)) return false;
             const c = this.zoningManager.getCell(key);
-            if (!c || c.zoneType !== 'Residential') return false;
+            if (!c || c.zoneType !== targetZoneType) return false;
           }
         }
         return true;
@@ -760,6 +818,8 @@ export class BuildingManager {
       isCoLiving,
       moveInStatus: 'none',
       residents: [],
+      vehicles: [],
+      employedWorkerIds: [],
       craneRefs: constructionSite.craneRefs,
     };
 
@@ -1298,10 +1358,17 @@ export class BuildingManager {
         ped.walkTimer += deltaTime;
         CitizenModelFactory.animateCitizenWalk(ped.mesh, ped.walkTimer, 7.8, 1.0);
       } else {
-        // 已走入屋內：市民正式進屋，移除 3D 模型
+        // 已走入屋內/廠內：市民正式進屋，移除 3D 模型
         ped.hasEnteredHouse = true;
-        this.pedestrianContainer.remove(ped.mesh);
-        ped.mesh = undefined;
+        if (ped.mesh) {
+          this.pedestrianContainer.remove(ped.mesh);
+          ped.mesh = undefined;
+        }
+
+        // 觸發抵達目的地之自訂回調 (如進入工廠就職或上車)
+        if (ped.onArrivedDestination) {
+          ped.onArrivedDestination();
+        }
 
         // 檢查該棟建築是否所有市民皆已走入屋內
         const bld = this.buildings.get(ped.buildingId);
@@ -1359,12 +1426,19 @@ export class BuildingManager {
         ? maleNames[Math.floor(Math.random() * maleNames.length)]
         : femaleNames[Math.floor(Math.random() * femaleNames.length)];
 
+      const isAdult = age >= 18;
+      const transitPreference: TransitPreference = !isAdult
+        ? (Math.random() < 0.6 ? 'WalkIfClose' : 'PreferTransit')
+        : (Math.random() < 0.45 ? 'DriveOnly' : (Math.random() < 0.75 ? 'WalkIfClose' : 'PreferTransit'));
+
       profiles.push({
         id: `cit_${this.nextCitizenId++}`,
         name: `${surname}${givenName}`,
         gender,
         age,
         homeBuildingId: buildingId,
+        transitPreference,
+        currentActivity: 'AtHome',
       });
     }
 
@@ -1382,15 +1456,20 @@ export class BuildingManager {
     building.buildingMesh.scale.set(1.0, 1.0, 1.0);
     building.group.remove(building.scaffoldingGroup);
 
-    // 觸發市民開車自邊界公路進入城市，遷入已登記之首批居民
-    this.dispatchCitizenVehicle(building, building.registeredResidents);
+    // 觸發市民開車自邊界公路進入城市，遷入已登記之首批居民 (來源：建屋遷入)
+    this.dispatchCitizenVehicle(building, building.registeredResidents, 'construction');
   }
 
   /**
    * 派遣市民車輛自外部邊界公路開車進入城市，尋找離家最近之停車位停車後下車步入家門
    * @param arrivingCount 本批抵達遷入之市民人數
+   * @param source 遷入來源 ('construction' 建屋遷入 vs 'merge' 併入遷入)
    */
-  private dispatchCitizenVehicle(building: PlacedBuilding, arrivingCount: number): void {
+  private dispatchCitizenVehicle(
+    building: PlacedBuilding,
+    arrivingCount: number,
+    source: VehicleMoveInSource = 'construction'
+  ): void {
     // 1. 市民尋找離家最近之合法路邊停車位
     let parkingSpot: CurbsideSpot | null = null;
     if (this.parkingManager) {
@@ -1521,19 +1600,46 @@ export class BuildingManager {
     const carColors = [0x1d4ed8, 0x0f172a, 0x94a3b8, 0x047857, 0xb91c1c];
     const chosenColor = carColors[Math.floor(Math.random() * carColors.length)];
 
+    // 建立住宅名下車輛登記記錄 (一間住宅可有一輛或多輛車，建屋遷入一輛，併入遷入一輛)
+    const vehicleId = `veh_${building.id}_${building.vehicles.length + 1}`;
+    const resVehicle: ResidenceVehicle = {
+      id: vehicleId,
+      buildingId: building.id,
+      source,
+      sourceLabel: source === 'construction' ? '建屋遷入' : '併入遷入',
+      color: chosenColor,
+      colorName: this.getVehicleColorName(chosenColor),
+      status: 'en_route_move_in',
+      registeredAt: Date.now(),
+    };
+    building.vehicles.push(resVehicle);
+
     this.vehicleManager.spawnMovingInVehicle(
       bestPath,
       chosenColor,
       (arrivedVehicle) => {
         // 1. 車輛成功停車：將其登記為路邊停放車輛 (保留 Mesh，永駐路側)
         if (parkingSpot && this.parkingManager) {
-          this.parkingManager.parkExistingCarMesh(arrivedVehicle.mesh, parkingSpot, chosenColor);
+          const parkedCar = this.parkingManager.parkExistingCarMesh(
+            arrivedVehicle.mesh,
+            parkingSpot,
+            chosenColor,
+            building.id,
+            resVehicle.id
+          );
+          resVehicle.parkedCarId = parkedCar.id;
+          resVehicle.parkedSpot = parkingSpot;
+          resVehicle.mesh = arrivedVehicle.mesh;
+          resVehicle.status = 'available';
+        } else {
+          resVehicle.status = 'available';
+          resVehicle.mesh = arrivedVehicle.mesh;
         }
 
-        // 2. 車子成功停車時計算人口數增加 (立即生效)
+        // 2. 車子成功停車時計算房內人數增加 (立即生效)
         building.currentOccupants += arrivingCount;
 
-        // 3. 車子停車成功後生成車內所有市民基本資料 (年齡以及性別)
+        // 3. 車子停車成功後生成車內所有市民基本資料 (年齡、性別、出行偏好)
         const newResidents = this.generateCitizenProfiles(building.id, arrivingCount);
         building.residents.push(...newResidents);
 
@@ -1691,6 +1797,42 @@ export class BuildingManager {
         </div>
       `;
     } else {
+      if (meta.category === 'Industrial_Low') {
+        const employedCount = b.employedWorkerIds ? b.employedWorkerIds.length : 0;
+        const currentInside = b.currentOccupants;
+        const statusColor = employedCount > 0 ? '#4ade80' : '#fbbf24';
+        const statusText = employedCount >= meta.capacity ? '已額滿運轉中' : (employedCount > 0 ? '招募中·運轉中' : '缺工招募中');
+
+        this.tooltipElement.innerHTML = `
+          <div style="font-weight: bold; font-size: 13px; color: #fbbf24; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;">
+            <span>🏭 ${meta.name}</span>
+            <span style="font-size: 10px; color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); padding: 1px 5px; border-radius: 4px;">低密度工業</span>
+          </div>
+          <div style="font-size: 11.5px; color: #94a3b8; margin-bottom: 6px;">
+            ${meta.description}
+          </div>
+          <div style="background: rgba(15, 23, 42, 0.55); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.06);">
+            <div style="display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 3px;">
+              <span style="color: #cbd5e1;">💼 入職人數:</span>
+              <span style="color: #38bdf8; font-weight: bold;">${employedCount} / ${meta.capacity} 人</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11.5px;">
+              <span style="color: #cbd5e1;">👥 現在內部人數:</span>
+              <span style="color: #4ade80; font-weight: bold;">${currentInside} 人</span>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8;">
+            <span>建築佔地規格:</span>
+            <span style="color: #f1f5f9;">面寬 ${meta.frontageWidth} 格 × 縱深 ${meta.lotDepth} 格 (${(meta.frontageWidth * 0.5).toFixed(1)}m × ${(meta.lotDepth * 0.5).toFixed(1)}m)</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; margin-top: 2px;">
+            <span>運營狀態:</span>
+            <span style="color: ${statusColor};">● ${statusText}</span>
+          </div>
+        `;
+        return;
+      }
+
       const coLivingText = b.isCoLiving ? '🤝 與人合居' : '👤 獨立自住';
       const moveInBadge = b.currentOccupants > 0
         ? '<span style="color: #4ade80;">● 已入住</span>'
@@ -1698,15 +1840,50 @@ export class BuildingManager {
             ? '<span style="color: #ef4444;">⚠️ 等待聯外道路</span>'
             : '<span style="color: #38bdf8;">🚗 遷入中...</span>');
 
+      let vehiclesHtml = '';
+      if (b.vehicles && b.vehicles.length > 0) {
+        const listVehicles = b.vehicles.map((v, idx) => {
+          const statusText = v.status === 'available'
+            ? '<span style="color: #4ade80;">● 閒置可用</span>'
+            : (v.status === 'in_use'
+                ? `<span style="color: #fbbf24;">🚗 出行中 (${v.currentDriverName || '市民'})</span>`
+                : '<span style="color: #38bdf8;">🚚 遷入中</span>');
+          return `
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
+              <span style="color: #cbd5e1;">🚗 #${idx + 1} [${v.sourceLabel} · ${v.colorName}]</span>
+              <span>${statusText}</span>
+            </div>
+          `;
+        }).join('');
+
+        vehiclesHtml = `
+          <div style="margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.08);">
+            <div style="color: #38bdf8; font-weight: bold; font-size: 11px; margin-bottom: 3px; display: flex; justify-content: space-between;">
+              <span>🚗 住宅名下車輛:</span>
+              <span style="color: #f1f5f9; font-weight: normal;">共 ${b.vehicles.length} 輛</span>
+            </div>
+            ${listVehicles}
+          </div>
+        `;
+      }
+
       let residentsHtml = '';
       if (b.residents && b.residents.length > 0) {
         const listItems = b.residents.map((r) => {
           const icon = r.gender === 'male' ? '👨' : '👩';
           const genderText = r.gender === 'male' ? '男' : '女';
+          const prefText = r.transitPreference === 'DriveOnly'
+            ? '偏好開車'
+            : (r.transitPreference === 'WalkIfClose' ? '短途步行' : '大眾運輸');
+          const actText = r.currentActivity === 'AtHome'
+            ? '<span style="color: #4ade80;">在家</span>'
+            : (r.currentTravelMode === 'drive'
+                ? '<span style="color: #fbbf24;">開車出行</span>'
+                : '<span style="color: #38bdf8;">步行出行</span>');
           return `
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
-              <span style="color: #f1f5f9;">${icon} ${r.name}</span>
-              <span style="color: #94a3b8;">${genderText} · ${r.age}歲</span>
+              <span style="color: #f1f5f9;">${icon} ${r.name} <span style="font-size: 10px; color: #64748b;">(${prefText})</span></span>
+              <span>${actText} · <span style="color: #94a3b8;">${genderText} ${r.age}歲</span></span>
             </div>
           `;
         }).join('');
@@ -1744,8 +1921,291 @@ export class BuildingManager {
           <span>正面朝向:</span>
           <span style="color: #22c55e;">正門面朝馬路</span>
         </div>
+        ${vehiclesHtml}
         ${residentsHtml}
       `;
+    }
+  }
+
+  // ==========================================
+  // 市民出行與車輛管理核心邏輯 (市民出行版本預備)
+  // ==========================================
+
+  /**
+   * 取得指定住宅名下所有登記車輛清單
+   */
+  public getBuildingVehicles(buildingId: string): ResidenceVehicle[] {
+    const b = this.buildings.get(buildingId);
+    return b ? [...b.vehicles] : [];
+  }
+
+  /**
+   * 取得指定住宅名下目前閒置可用之車輛清單
+   */
+  public getAvailableVehicles(buildingId: string): ResidenceVehicle[] {
+    const b = this.buildings.get(buildingId);
+    if (!b) return [];
+    return b.vehicles.filter((v) => v.status === 'available');
+  }
+
+  /**
+   * 住宅內市民出行方式決策 (核心邏輯)
+   * 住宅內市民要出行時，可以選擇從該市民住宅之下的車輛作為出行的方式 (注意: 是方式，不一定要開車出發)
+   * @param citizenId 要出行的市民 ID
+   * @param options 可選出行設定 (目的地、距離、強制方式等)
+   */
+  public decideCitizenTravel(citizenId: string, options?: TravelDecisionOptions): TravelDecisionResult {
+    let foundCitizen: CitizenProfile | null = null;
+    let homeBuilding: PlacedBuilding | null = null;
+
+    for (const b of this.buildings.values()) {
+      const c = b.residents.find((r) => r.id === citizenId);
+      if (c) {
+        foundCitizen = c;
+        homeBuilding = b;
+        break;
+      }
+    }
+
+    if (!foundCitizen || !homeBuilding) {
+      return {
+        success: false,
+        citizenId,
+        citizenName: '未知市民',
+        citizenAge: 0,
+        buildingId: '',
+        buildingName: '',
+        selectedMode: 'walk',
+        canDrive: false,
+        availableVehiclesCount: 0,
+        totalVehiclesCount: 0,
+        reason: '找不到該市民或其所屬住宅',
+        timestamp: Date.now(),
+      };
+    }
+
+    if (foundCitizen.currentActivity !== 'AtHome') {
+      return {
+        success: false,
+        citizenId: foundCitizen.id,
+        citizenName: foundCitizen.name,
+        citizenAge: foundCitizen.age,
+        buildingId: homeBuilding.id,
+        buildingName: homeBuilding.metadata.name,
+        selectedMode: foundCitizen.currentTravelMode || 'walk',
+        canDrive: false,
+        availableVehiclesCount: this.getAvailableVehicles(homeBuilding.id).length,
+        totalVehiclesCount: homeBuilding.vehicles.length,
+        reason: `市民目前已在出行狀態中 (${foundCitizen.currentActivity})，需返家後方能再次出發`,
+        timestamp: Date.now(),
+      };
+    }
+
+    const isAdult = foundCitizen.age >= 18;
+    const availableVehicles = homeBuilding.vehicles.filter((v) => v.status === 'available');
+    const totalVehicles = homeBuilding.vehicles.length;
+    const canDrive = isAdult && availableVehicles.length > 0;
+
+    let selectedMode: TravelMode = 'walk';
+    let selectedVehicle: ResidenceVehicle | undefined = undefined;
+    let reason = '';
+
+    if (options?.forceMode) {
+      if (options.forceMode === 'drive') {
+        if (canDrive) {
+          selectedMode = 'drive';
+          selectedVehicle = availableVehicles[0];
+          reason = `指定開車出行：成功選用住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 出發。`;
+        } else if (!isAdult) {
+          selectedMode = 'walk';
+          reason = `指定開車失敗：市民未滿 18 歲 (${foundCitizen.age}歲)，無法駕車，改為步行出發。`;
+        } else {
+          selectedMode = 'walk';
+          reason = `指定開車失敗：住宅名下 ${totalVehicles} 輛車目前皆在出行使用中，改為步行出發。`;
+        }
+      } else {
+        selectedMode = options.forceMode;
+        reason = `指定以 ${selectedMode === 'walk' ? '步行' : '大眾運輸'} 出行，住宅名下車輛保留在住宅旁。`;
+      }
+    } else {
+      // 自主決策模式 (市民日常出行決策)
+      if (canDrive) {
+        // 住宅名下有車可用且市民年滿 18 歲，市民可選擇車輛作為出行方式之一
+        if (foundCitizen.transitPreference === 'DriveOnly') {
+          selectedMode = 'drive';
+          selectedVehicle = availableVehicles[0];
+          reason = `市民偏好開車，選擇使用住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 出行。`;
+        } else if (foundCitizen.transitPreference === 'WalkIfClose') {
+          const isClose = options?.distanceMeters !== undefined ? options.distanceMeters <= 20 : Math.random() < 0.5;
+          if (isClose) {
+            selectedMode = 'walk';
+            reason = `市民偏好短途步行，雖住宅有名下車輛可用，評估後仍選擇步行出發。`;
+          } else {
+            selectedMode = 'drive';
+            selectedVehicle = availableVehicles[0];
+            reason = `出行距離較遠，市民決定開住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 出發。`;
+          }
+        } else {
+          // PreferTransit
+          const chooseTransit = Math.random() < 0.6;
+          if (chooseTransit) {
+            selectedMode = 'transit';
+            reason = `市民偏好大眾運輸，保留住宅名下車輛，選擇搭乘公車/捷運出行。`;
+          } else {
+            selectedMode = 'drive';
+            selectedVehicle = availableVehicles[0];
+            reason = `市民考慮班次後，改選住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 開車出行。`;
+          }
+        }
+      } else {
+        // 無法開車 (未成年、無車、或車輛全數在用)
+        if (!isAdult) {
+          selectedMode = 'walk';
+          reason = `市民年齡為 ${foundCitizen.age} 歲（未滿 18 歲），不可單獨駕車，選擇步行/大眾運輸出行。`;
+        } else if (totalVehicles === 0) {
+          selectedMode = 'walk';
+          reason = `住宅名下尚無登記車輛，選擇步行出行。`;
+        } else {
+          selectedMode = 'walk';
+          reason = `住宅名下 ${totalVehicles} 輛車已全數由其他合居成員出行使用中，選擇步行出行。`;
+        }
+      }
+    }
+
+    // 執行狀態轉換
+    if (selectedMode === 'drive' && selectedVehicle) {
+      selectedVehicle.status = 'in_use';
+      selectedVehicle.currentDriverCitizenId = foundCitizen.id;
+      selectedVehicle.currentDriverName = foundCitizen.name;
+      foundCitizen.currentVehicleId = selectedVehicle.id;
+    } else {
+      foundCitizen.currentVehicleId = undefined;
+    }
+
+    foundCitizen.currentTravelMode = selectedMode;
+    foundCitizen.currentActivity = 'Traveling';
+    homeBuilding.currentOccupants = Math.max(0, homeBuilding.currentOccupants - 1);
+
+    return {
+      success: true,
+      citizenId: foundCitizen.id,
+      citizenName: foundCitizen.name,
+      citizenAge: foundCitizen.age,
+      buildingId: homeBuilding.id,
+      buildingName: homeBuilding.metadata.name,
+      selectedMode,
+      selectedVehicle,
+      canDrive,
+      availableVehiclesCount: this.getAvailableVehicles(homeBuilding.id).length,
+      totalVehiclesCount: totalVehicles,
+      reason,
+      timestamp: Date.now(),
+    };
+  }
+
+  /**
+   * 市民出行返家 (歸還車輛，重設狀態)
+   */
+  public returnCitizenToResidence(citizenId: string): { success: boolean; reason: string } {
+    let foundCitizen: CitizenProfile | null = null;
+    let homeBuilding: PlacedBuilding | null = null;
+
+    for (const b of this.buildings.values()) {
+      const c = b.residents.find((r) => r.id === citizenId);
+      if (c) {
+        foundCitizen = c;
+        homeBuilding = b;
+        break;
+      }
+    }
+
+    if (!foundCitizen || !homeBuilding) {
+      return { success: false, reason: '找不到該市民或其所屬住宅' };
+    }
+
+    if (foundCitizen.currentActivity === 'AtHome') {
+      return { success: false, reason: `${foundCitizen.name} 已經在家中` };
+    }
+
+    // 若此前開車，歸還車輛給住宅
+    if (foundCitizen.currentVehicleId) {
+      const v = homeBuilding.vehicles.find((veh) => veh.id === foundCitizen!.currentVehicleId);
+      if (v) {
+        v.status = 'available';
+        v.currentDriverCitizenId = undefined;
+        v.currentDriverName = undefined;
+      }
+    }
+
+    foundCitizen.currentVehicleId = undefined;
+    foundCitizen.currentTravelMode = undefined;
+    foundCitizen.currentActivity = 'AtHome';
+    homeBuilding.currentOccupants += 1;
+
+    return {
+      success: true,
+      reason: `${foundCitizen.name} 已順利返家，所用交通方式已結算，住宅名下車輛已歸還恢復可用。`,
+    };
+  }
+
+  /**
+   * 取得特定市民詳細檔案
+   */
+  public getCitizenProfile(citizenId: string): CitizenProfile | undefined {
+    for (const b of this.buildings.values()) {
+      const c = b.residents.find((r) => r.id === citizenId);
+      if (c) return c;
+    }
+    return undefined;
+  }
+
+  /**
+   * 取得指定住宅或全城所有市民清單
+   */
+  public getAllResidents(buildingId?: string): CitizenProfile[] {
+    if (buildingId) {
+      const b = this.buildings.get(buildingId);
+      return b ? [...b.residents] : [];
+    }
+    const list: CitizenProfile[] = [];
+    for (const b of this.buildings.values()) {
+      list.push(...b.residents);
+    }
+    return list;
+  }
+
+  /**
+   * 車身烤漆顏色中文對照
+   */
+  private getVehicleColorName(hex: number): string {
+    switch (hex) {
+      case 0x1d4ed8:
+      case 0x0284c7:
+      case 0x2563eb:
+        return '蔚藍色';
+      case 0xdc2626:
+      case 0xb91c1c:
+        return '烈紅色';
+      case 0x16a34a:
+      case 0x047857:
+        return '墨綠色';
+      case 0xea580c:
+        return '暖橙色';
+      case 0xf8fafc:
+      case 0xffffff:
+        return '珍珠白';
+      case 0x334155:
+      case 0x94a3b8:
+        return '鐵灰色';
+      case 0x0f172a:
+      case 0x1e293b:
+        return '曜石黑';
+      case 0xeab308:
+        return '鮮黃色';
+      case 0x7c3aed:
+        return '紫羅蘭';
+      default:
+        return '自用車';
     }
   }
 
@@ -1757,10 +2217,23 @@ export class BuildingManager {
     return Array.from(this.buildings.values());
   }
 
+  public getResidentialBuildings(): PlacedBuilding[] {
+    const list: PlacedBuilding[] = [];
+    for (const b of this.buildings.values()) {
+      if (b.metadata.category === 'Residential_Low') {
+        list.push(b);
+      }
+    }
+    return list;
+  }
+
   public getTotalPopulation(): number {
     let total = 0;
     for (const b of this.buildings.values()) {
-      total += b.currentOccupants;
+      if (b.metadata.category === 'Residential_Low') {
+        // 總居住人口以登記居住市民數為準
+        total += b.residents.length > 0 ? b.residents.length : b.currentOccupants;
+      }
     }
     return total;
   }
@@ -1783,5 +2256,518 @@ export class BuildingManager {
 
   public getLatestMatchingResult(): MatchingResult | null {
     return this.latestMatchingResult;
+  }
+
+  /**
+   * 開發者專用：檢查低密度工業區是否有合法建地並立即起建工業建築
+   * 1. 支援隨機或自動適配任意尺寸之工業建築 (4x4, 5x5, 5x6, 6x6)
+   * 2. 亦支援指定特定房型 ID 起建
+   * 3. 嚴格檢驗正面臨路、已連通外聯道路且不被佔用
+   */
+  public buildIndustrialBuilding(preferredModelId?: string): {
+    success: boolean;
+    message: string;
+    building?: PlacedBuilding;
+  } {
+    const catalog = BuildingModelFactory.getModelsCatalog().filter(
+      (m) => m.category === 'Industrial_Low'
+    );
+
+    let candidateModels: BuildingMetadata[] = [];
+    if (preferredModelId) {
+      const targetMeta = catalog.find((m) => m.id === preferredModelId);
+      if (!targetMeta) {
+        return { success: false, message: `找不到指定的工業建築型號：${preferredModelId}` };
+      }
+      candidateModels = [targetMeta];
+    } else {
+      // 依序嘗試或隨機匹配各款工業建築
+      candidateModels = [...catalog].sort(() => Math.random() - 0.5);
+    }
+
+    // 檢查是否有劃分低密度工業區
+    let totalIndustrialCells = 0;
+    for (const cell of this.zoningManager.getCells().values()) {
+      if (cell.zoneType === 'Industrial' && !this.occupiedCells.has(cell.key)) {
+        totalIndustrialCells++;
+      }
+    }
+
+    if (totalIndustrialCells === 0) {
+      return {
+        success: false,
+        message: '全市尚未劃分低密度工業區（琥珀黃）或現有工業區已全數被佔用！請先在區塊劃分工具中指定工業區。',
+      };
+    }
+
+    for (const meta of candidateModels) {
+      const site = this.findSiteForModel(meta);
+      if (site) {
+        const building = this.spawnBuilding(meta, site, meta.capacity);
+        building.registeredResidents = 0;
+        building.currentOccupants = 0;
+        building.employedWorkerIds = [];
+        // 建造完成並隱藏鷹架
+        building.status = 'completed';
+        building.constructionProgress = 1.0;
+        building.buildingMesh.position.y = 0;
+        building.buildingMesh.scale.set(1.0, 1.0, 1.0);
+        building.scaffoldingGroup.visible = false;
+
+        return {
+          success: true,
+          message: `成功於 (${site.originZx}, ${site.originZz}) 起建【${meta.name}】！工作人數上限：${meta.capacity} 人`,
+          building,
+        };
+      }
+    }
+
+    return {
+      success: false,
+      message: '現存低密度工業區中未找到符合「正面緊貼馬路」與「具外聯公路路徑」之足夠空間！請確認工業區緊鄰已鋪設的雙向車道。',
+    };
+  }
+
+  /**
+   * 取得全市所有已建之工業建築清單
+   */
+  public getIndustrialBuildings(): PlacedBuilding[] {
+    const list: PlacedBuilding[] = [];
+    for (const b of this.buildings.values()) {
+      if (b.metadata.category === 'Industrial_Low') {
+        list.push(b);
+      }
+    }
+    return list;
+  }
+
+  /**
+   * 取得全市工業建築總職缺容量、當前入職人數與當前內部工人人數
+   */
+  public getTotalIndustrialCapacity(): {
+    currentWorkers: number;
+    totalEmployed: number;
+    totalCapacity: number;
+    count: number;
+  } {
+    const list = this.getIndustrialBuildings();
+    let totalCapacity = 0;
+    let currentWorkers = 0;
+    let totalEmployed = 0;
+    for (const b of list) {
+      totalCapacity += b.metadata.capacity;
+      currentWorkers += b.currentOccupants;
+      totalEmployed += b.employedWorkerIds ? b.employedWorkerIds.length : 0;
+    }
+    return {
+      currentWorkers,
+      totalEmployed,
+      totalCapacity,
+      count: list.length,
+    };
+  }
+
+  /**
+   * 搜尋兩路塊間之最佳連續車道行車路徑
+   */
+  public findBestRoadPath(originTileKey: string, destTileKey: string): PathResult | null {
+    const originTile = this.roadNetwork.getTile(originTileKey);
+    const destTile = this.roadNetwork.getTile(destTileKey);
+    if (!originTile || !destTile) return null;
+
+    const allLanes = this.roadNetwork.getAllLanes();
+    let bestPath: PathResult | null = null;
+    let shortestDist = Infinity;
+
+    for (const startLane of originTile.lanes) {
+      for (const goalLane of destTile.lanes) {
+        const path = Pathfinding.findShortestPath(startLane.id, goalLane.id, allLanes);
+        if (path && path.routeWaypoints && path.routeWaypoints.length >= 2) {
+          if (path.totalDistance < shortestDist) {
+            shortestDist = path.totalDistance;
+            bestPath = path;
+          }
+        }
+      }
+    }
+    return bestPath;
+  }
+
+  /**
+   * 邊界斷路或特殊無解情況之直達備援路徑
+   */
+  private createDirectFallbackPath(fromPos: THREE.Vector3, toPos: THREE.Vector3): PathResult {
+    const p1 = fromPos.clone();
+    p1.y = 0.04;
+    const p2 = toPos.clone();
+    p2.y = 0.04;
+    const rwps: RouteWaypoint[] = [
+      { position: p1, laneId: 'fallback_start', isIntersection: false, isStopLine: false },
+      { position: p2, laneId: 'fallback_end', isIntersection: false, isStopLine: false },
+    ];
+    return {
+      laneIds: ['fallback_lane'],
+      waypoints: [p1, p2],
+      routeWaypoints: rwps,
+      totalDistance: p1.distanceTo(p2),
+    };
+  }
+
+  private onCommuteStateChanged?: () => void;
+
+  public setOnCommuteStateChangedCallback(cb: () => void): void {
+    this.onCommuteStateChanged = cb;
+  }
+
+  /**
+   * 隨機市民上班測試：
+   * 1. 隨機選取一位在家的市民
+   * 2. 隨機分配到入職人數未滿的工廠
+   * 3. 50% 機率開車、50% 機率步行
+   * 4. 開車時若住宅無閒置車輛，自動改以步行
+   * 5. 走路直接走入工廠；開車則開至工廠後尋找就近停車位，停車、下車並步行進入工廠
+   */
+  public testRandomCitizenCommute(): {
+    success: boolean;
+    citizen?: CitizenProfile;
+    homeBuilding?: PlacedBuilding;
+    factory?: PlacedBuilding;
+    mode?: 'drive' | 'walk';
+    vehicle?: ResidenceVehicle;
+    reason: string;
+  } {
+    // 1. 隨機選取一位在家的市民
+    const atHomeCitizens = this.getAllResidents().filter((r) => r.currentActivity === 'AtHome');
+    if (atHomeCitizens.length === 0) {
+      return {
+        success: false,
+        reason: '⚠️ 全市目前無在家中的市民可供上班（請先在上方產生住房需求入住，或召回已出行的市民）。',
+      };
+    }
+
+    // 2. 檢驗工廠職缺狀態
+    const factories = this.getIndustrialBuildings();
+    if (factories.length === 0) {
+      return {
+        success: false,
+        reason: '⚠️ 全市尚未建造任何低密度工業建築！請先使用下方「低密度工業區建造」工具起建工廠。',
+      };
+    }
+
+    const availableFactories = factories.filter(
+      (f) => (f.employedWorkerIds ? f.employedWorkerIds.length : 0) < f.metadata.capacity
+    );
+    if (availableFactories.length === 0) {
+      return {
+        success: false,
+        reason: `⚠️ 全市已建的 ${factories.length} 棟工廠入職人數皆已額滿！請建造更多工廠以提供工作職缺。`,
+      };
+    }
+
+    // 3. 隨機選取一名市民與一家尚有入職缺額的工廠
+    const citizen = atHomeCitizens[Math.floor(Math.random() * atHomeCitizens.length)];
+    const homeBuilding = this.buildings.get(citizen.homeBuildingId);
+    if (!homeBuilding) {
+      return { success: false, reason: '找不到市民所屬的住宅建築。' };
+    }
+
+    const targetFactory = availableFactories[Math.floor(Math.random() * availableFactories.length)];
+    if (!targetFactory.employedWorkerIds) targetFactory.employedWorkerIds = [];
+    if (!targetFactory.employedWorkerIds.includes(citizen.id)) {
+      targetFactory.employedWorkerIds.push(citizen.id);
+    }
+    citizen.workBuildingId = targetFactory.id;
+
+    // 4. 決策交通方式：50% 機率開車，50% 機率步行 (先不考慮市民偏好)
+    const rollDrive = Math.random() < 0.5;
+    const availableVehicles = homeBuilding.vehicles.filter((v) => v.status === 'available');
+
+    let mode: 'drive' | 'walk' = 'walk';
+    let chosenVehicle: ResidenceVehicle | undefined = undefined;
+    let reason = '';
+
+    if (rollDrive) {
+      if (availableVehicles.length > 0) {
+        mode = 'drive';
+        chosenVehicle = availableVehicles[0];
+        reason = `隨機 50% 機率決定【開車上班】。住宅名下具可用車輛 [${chosenVehicle.sourceLabel} · ${chosenVehicle.colorName}]，市民走向車輛並開車前往。`;
+      } else {
+        mode = 'walk';
+        reason = `隨機 50% 機率決定【開車上班】，但住宅名下暫無可用閒置車輛，自動改以【步行上班】前往。`;
+      }
+    } else {
+      mode = 'walk';
+      reason = `隨機 50% 機率決定【步行上班】。市民自住宅直接徒步前往工廠。`;
+    }
+
+    // 5. 更新市民與住宅狀態
+    homeBuilding.currentOccupants = Math.max(0, homeBuilding.currentOccupants - 1);
+    citizen.currentActivity = 'CommutingToWork';
+    citizen.currentTravelMode = mode;
+
+    // 6. 執行通勤動態
+    if (mode === 'walk') {
+      citizen.currentVehicleId = undefined;
+
+      // 建立沿路步行路徑至工廠
+      const roadPath = this.findBestRoadPath(homeBuilding.targetRoadTileKey, targetFactory.targetRoadTileKey);
+      const waypoints: THREE.Vector3[] = [homeBuilding.frontWorldPos.clone()];
+      if (roadPath && roadPath.waypoints.length > 0) {
+        for (const pt of roadPath.waypoints) {
+          const p = pt.clone();
+          p.y = 0.018;
+          waypoints.push(p);
+        }
+      }
+      waypoints.push(targetFactory.frontWorldPos.clone());
+      const factoryDoor = targetFactory.worldCenter.clone().lerp(targetFactory.frontWorldPos, 0.45);
+      factoryDoor.y = 0.018;
+      waypoints.push(factoryDoor);
+
+      const pedMesh = CitizenModelFactory.createCitizen({
+        gender: citizen.gender,
+        variant: Math.floor(Math.random() * 3),
+      });
+      pedMesh.position.copy(waypoints[0]);
+      this.pedestrianContainer.add(pedMesh);
+
+      const walkPed: MovingInPedestrian = {
+        id: `commute_walk_${citizen.id}_${Date.now()}`,
+        buildingId: targetFactory.id,
+        profile: citizen,
+        mesh: pedMesh,
+        spawnDelay: 0,
+        currentWaypointIndex: 1,
+        waypoints,
+        speed: 1.5,
+        walkTimer: 0,
+        isAlighted: true,
+        hasEnteredHouse: false,
+        onArrivedDestination: () => {
+          targetFactory.currentOccupants += 1;
+          citizen.currentActivity = 'AtWork';
+          this.updateTooltipContent();
+          if (this.onCommuteStateChanged) this.onCommuteStateChanged();
+        },
+      };
+      this.activePedestrians.push(walkPed);
+    } else {
+      // 開車模式
+      chosenVehicle!.status = 'in_use';
+      chosenVehicle!.currentDriverCitizenId = citizen.id;
+      chosenVehicle!.currentDriverName = citizen.name;
+      citizen.currentVehicleId = chosenVehicle!.id;
+
+      // 取得車輛目前停放位置
+      const carSpotPos = chosenVehicle!.parkedSpot
+        ? chosenVehicle!.parkedSpot.position.clone()
+        : homeBuilding.frontWorldPos.clone();
+      carSpotPos.y = 0.018;
+
+      const walkToCarWaypoints = [
+        homeBuilding.frontWorldPos.clone(),
+        carSpotPos.clone(),
+      ];
+
+      const pedMesh = CitizenModelFactory.createCitizen({
+        gender: citizen.gender,
+        variant: Math.floor(Math.random() * 3),
+      });
+      pedMesh.position.copy(walkToCarWaypoints[0]);
+      this.pedestrianContainer.add(pedMesh);
+
+      const walkToCarPed: MovingInPedestrian = {
+        id: `commute_to_car_${citizen.id}_${Date.now()}`,
+        buildingId: homeBuilding.id,
+        profile: citizen,
+        mesh: pedMesh,
+        spawnDelay: 0,
+        currentWaypointIndex: 1,
+        waypoints: walkToCarWaypoints,
+        speed: 1.35,
+        walkTimer: 0,
+        isAlighted: true,
+        hasEnteredHouse: false,
+        onArrivedDestination: () => {
+          // 市民上車！解鎖路邊停車位
+          if (chosenVehicle!.parkedCarId && this.parkingManager) {
+            this.parkingManager.removeParkedCar(chosenVehicle!.parkedCarId);
+            chosenVehicle!.parkedCarId = undefined;
+            chosenVehicle!.parkedSpot = undefined;
+          }
+
+          // 尋找行車路徑
+          let drivePath = this.findBestRoadPath(homeBuilding.targetRoadTileKey, targetFactory.targetRoadTileKey);
+          if (!drivePath) {
+            drivePath = this.createDirectFallbackPath(homeBuilding.frontWorldPos, targetFactory.frontWorldPos);
+          }
+
+          // 生成行駛中的市民車輛
+          this.vehicleManager.spawnMovingInVehicle(
+            drivePath,
+            chosenVehicle!.color,
+            (arrivedVeh) => {
+              // 開到廠處後，開始就近尋找停車位，找到後停車、下車並步行進入工廠
+              const parkSpot = this.parkingManager?.findClosestAvailableSpot(
+                targetFactory.frontWorldPos,
+                targetFactory.targetRoadTileKey
+              );
+
+              let dropOffPos: THREE.Vector3;
+              if (parkSpot && this.parkingManager) {
+                const parkedCar = this.parkingManager.parkExistingCarMesh(
+                  arrivedVeh.mesh,
+                  parkSpot,
+                  chosenVehicle!.color,
+                  targetFactory.id,
+                  chosenVehicle!.id
+                );
+                chosenVehicle!.parkedCarId = parkedCar.id;
+                chosenVehicle!.parkedSpot = parkSpot;
+                dropOffPos = parkSpot.position.clone();
+                if (parkSpot.side === 'west') dropOffPos.x -= 0.18;
+                else if (parkSpot.side === 'east') dropOffPos.x += 0.18;
+                else if (parkSpot.side === 'north') dropOffPos.z -= 0.18;
+                else if (parkSpot.side === 'south') dropOffPos.z += 0.18;
+              } else {
+                arrivedVeh.mesh.position.copy(targetFactory.frontWorldPos);
+                dropOffPos = targetFactory.frontWorldPos.clone();
+              }
+              dropOffPos.y = 0.018;
+
+              // 市民下車，步行進入工廠
+              const factoryDoor = targetFactory.worldCenter.clone().lerp(targetFactory.frontWorldPos, 0.45);
+              factoryDoor.y = 0.018;
+
+              const walkToFactoryWaypoints = [
+                dropOffPos.clone(),
+                targetFactory.frontWorldPos.clone(),
+                factoryDoor.clone(),
+              ];
+
+              const alightedPedMesh = CitizenModelFactory.createCitizen({
+                gender: citizen.gender,
+                variant: Math.floor(Math.random() * 3),
+              });
+              alightedPedMesh.position.copy(walkToFactoryWaypoints[0]);
+              this.pedestrianContainer.add(alightedPedMesh);
+
+              const walkToFactoryPed: MovingInPedestrian = {
+                id: `commute_alight_walk_${citizen.id}_${Date.now()}`,
+                buildingId: targetFactory.id,
+                profile: citizen,
+                mesh: alightedPedMesh,
+                spawnDelay: 0.15,
+                currentWaypointIndex: 1,
+                waypoints: walkToFactoryWaypoints,
+                speed: 1.25,
+                walkTimer: 0,
+                isAlighted: true,
+                hasEnteredHouse: false,
+                onArrivedDestination: () => {
+                  targetFactory.currentOccupants += 1;
+                  citizen.currentActivity = 'AtWork';
+                  this.updateTooltipContent();
+                  if (this.onCommuteStateChanged) this.onCommuteStateChanged();
+                },
+              };
+              this.activePedestrians.push(walkToFactoryPed);
+            },
+            true // keepMeshOnArrive = true
+          );
+        },
+      };
+      this.activePedestrians.push(walkToCarPed);
+    }
+
+    this.updateTooltipContent();
+    if (this.onCommuteStateChanged) this.onCommuteStateChanged();
+
+    return {
+      success: true,
+      citizen,
+      homeBuilding,
+      factory: targetFactory,
+      mode,
+      vehicle: chosenVehicle,
+      reason,
+    };
+  }
+
+  /**
+   * 召回所有外出上班與通勤中的市民平安返家
+   */
+  public recallAllCitizensToResidence(): number {
+    let count = 0;
+
+    // 清理在途中步行的行人模型
+    for (const ped of this.activePedestrians) {
+      if (ped.mesh) {
+        this.pedestrianContainer.remove(ped.mesh);
+      }
+    }
+    this.activePedestrians = [];
+
+    // 將所有不在家的市民召回住宅
+    for (const bld of this.buildings.values()) {
+      if (bld.metadata.category === 'Residential_Low') {
+        for (const c of bld.residents) {
+          if (c.currentActivity !== 'AtHome') {
+            count++;
+            // 若在工廠上班中，扣除工廠現在內部人數
+            if (c.workBuildingId) {
+              const fac = this.buildings.get(c.workBuildingId);
+              if (fac && fac.currentOccupants > 0) {
+                fac.currentOccupants = Math.max(0, fac.currentOccupants - 1);
+              }
+            }
+
+            // 若借出車輛，歸還並重新停放在住宅旁
+            if (c.currentVehicleId) {
+              const veh = bld.vehicles.find((v) => v.id === c.currentVehicleId);
+              if (veh) {
+                if (veh.parkedCarId && this.parkingManager) {
+                  this.parkingManager.removeParkedCar(veh.parkedCarId);
+                  veh.parkedCarId = undefined;
+                  veh.parkedSpot = undefined;
+                }
+
+                // 重新停放回住宅門前可用車位
+                const homeSpot = this.parkingManager?.findClosestAvailableSpot(
+                  bld.frontWorldPos,
+                  bld.targetRoadTileKey
+                );
+                if (homeSpot && this.parkingManager) {
+                  const mesh = veh.mesh ?? VehicleModelFactory.createVehicle(veh.color);
+                  const parked = this.parkingManager.parkExistingCarMesh(
+                    mesh,
+                    homeSpot,
+                    veh.color,
+                    bld.id,
+                    veh.id
+                  );
+                  veh.parkedCarId = parked.id;
+                  veh.parkedSpot = homeSpot;
+                  veh.mesh = mesh;
+                }
+
+                veh.status = 'available';
+                veh.currentDriverCitizenId = undefined;
+                veh.currentDriverName = undefined;
+              }
+            }
+
+            c.currentActivity = 'AtHome';
+            c.currentTravelMode = undefined;
+            c.currentVehicleId = undefined;
+            bld.currentOccupants += 1;
+          }
+        }
+      }
+    }
+
+    this.updateTooltipContent();
+    if (this.onCommuteStateChanged) this.onCommuteStateChanged();
+    return count;
   }
 }

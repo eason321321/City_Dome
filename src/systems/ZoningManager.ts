@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoadNetwork, RoadTile } from './RoadNetwork';
 import { CameraManager } from '../rendering/CameraManager';
 
-export type ZoneType = 'None' | 'Residential';
+export type ZoneType = 'None' | 'Residential' | 'Industrial';
 export type ZoningToolMode = 'brush' | 'box';
 
 export interface ZoningPreviewInfo {
@@ -10,7 +10,7 @@ export interface ZoningPreviewInfo {
   widthCells: number;
   depthCells: number;
   cellCount: number;
-  mode: 'Residential' | 'Dezone';
+  mode: 'Residential' | 'Industrial' | 'Dezone';
 }
 
 export interface ZoningCell {
@@ -51,7 +51,7 @@ export class ZoningManager {
 
   // 互動狀態
   private isToolActive: boolean = false;
-  private currentMode: 'Residential' | 'Dezone' = 'Residential';
+  private currentMode: 'Residential' | 'Industrial' | 'Dezone' = 'Residential';
   private toolMode: ZoningToolMode = 'brush';
   private isMouseDown: boolean = false;
   private currentMouseButton: number = 0; // 0: 左鍵, 2: 右鍵
@@ -69,8 +69,10 @@ export class ZoningManager {
   private boxFillMesh: THREE.Mesh;
   private boxOutlineLine: THREE.LineLoop;
   private boxFillMatResidential: THREE.MeshBasicMaterial;
+  private boxFillMatIndustrial: THREE.MeshBasicMaterial;
   private boxFillMatDezone: THREE.MeshBasicMaterial;
   private boxBorderMatResidential: THREE.LineBasicMaterial;
+  private boxBorderMatIndustrial: THREE.LineBasicMaterial;
   private boxBorderMatDezone: THREE.LineBasicMaterial;
 
   // 射線與碰撞平面
@@ -80,7 +82,9 @@ export class ZoningManager {
   // 共享材質與幾何體 (配合 0.5m 小格子)
   private sharedCellGeo: THREE.PlaneGeometry = new THREE.PlaneGeometry(0.46, 0.46);
   private residentialMat: THREE.MeshStandardMaterial;
+  private industrialMat: THREE.MeshStandardMaterial;
   private hoverMatResidential: THREE.MeshBasicMaterial;
+  private hoverMatIndustrial: THREE.MeshBasicMaterial;
   private hoverMatDezone: THREE.MeshBasicMaterial;
 
   // 外部狀態回調
@@ -123,9 +127,30 @@ export class ZoningManager {
       polygonOffsetUnits: -1,
     });
 
+    // 1.1 工業區琥珀黃色塊材質
+    this.industrialMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b, // 琥珀黃
+      emissive: 0xd97706,
+      emissiveIntensity: 0.35,
+      roughness: 0.45,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.72,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+
     // 2. 懸浮筆刷指示框材質
     this.hoverMatResidential = new THREE.MeshBasicMaterial({
       color: 0x4ade80, // 明亮螢光綠
+      wireframe: true,
+      transparent: true,
+      opacity: 0.9,
+    });
+
+    this.hoverMatIndustrial = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24, // 明亮琥珀黃
       wireframe: true,
       transparent: true,
       opacity: 0.9,
@@ -155,6 +180,14 @@ export class ZoningManager {
       side: THREE.DoubleSide,
     });
 
+    this.boxFillMatIndustrial = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
     this.boxFillMatDezone = new THREE.MeshBasicMaterial({
       color: 0xef4444,
       transparent: true,
@@ -165,6 +198,13 @@ export class ZoningManager {
 
     this.boxBorderMatResidential = new THREE.LineBasicMaterial({
       color: 0x86efac, // 明亮淺螢光綠
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    });
+
+    this.boxBorderMatIndustrial = new THREE.LineBasicMaterial({
+      color: 0xfde68a, // 明亮淺琥珀黃
       transparent: true,
       opacity: 0.95,
       depthWrite: false,
@@ -216,7 +256,7 @@ export class ZoningManager {
     return this.isToolActive;
   }
 
-  public getCurrentMode(): 'Residential' | 'Dezone' {
+  public getCurrentMode(): 'Residential' | 'Industrial' | 'Dezone' {
     return this.currentMode;
   }
 
@@ -244,10 +284,18 @@ export class ZoningManager {
     return cell !== undefined && cell.zoneType === 'Residential';
   }
 
+  public isCellIndustrial(zx: number, zz: number): boolean {
+    const cell = this.cells.get(`${zx},${zz}`);
+    return cell !== undefined && cell.zoneType === 'Industrial';
+  }
+
   /**
    * 開啟或關閉土地劃分工具
    */
-  public setToolActive(active: boolean, mode: 'Residential' | 'Dezone' = 'Residential'): void {
+  public setToolActive(
+    active: boolean,
+    mode: 'Residential' | 'Industrial' | 'Dezone' = 'Residential'
+  ): void {
     this.isToolActive = active;
     this.currentMode = mode;
     this.isMouseDown = false;
@@ -271,24 +319,36 @@ export class ZoningManager {
   }
 
   /**
-   * 切換劃分模式（住宅區 vs 清除劃分）
+   * 切換劃分模式（住宅區 vs 工業區 vs 清除劃分）
    */
-  public setZoneMode(mode: 'Residential' | 'Dezone'): void {
+  public setZoneMode(mode: 'Residential' | 'Industrial' | 'Dezone'): void {
     this.currentMode = mode;
     this.updateHoverBrushMaterial();
     this.updateBoxMaterials();
   }
 
   private updateHoverBrushMaterial(): void {
-    this.hoverBrushMesh.material =
-      this.currentMode === 'Residential' ? this.hoverMatResidential : this.hoverMatDezone;
+    if (this.currentMode === 'Residential') {
+      this.hoverBrushMesh.material = this.hoverMatResidential;
+    } else if (this.currentMode === 'Industrial') {
+      this.hoverBrushMesh.material = this.hoverMatIndustrial;
+    } else {
+      this.hoverBrushMesh.material = this.hoverMatDezone;
+    }
   }
 
   private updateBoxMaterials(): void {
     if (!this.boxFillMesh || !this.boxOutlineLine) return;
-    const isRes = this.currentMode === 'Residential';
-    this.boxFillMesh.material = isRes ? this.boxFillMatResidential : this.boxFillMatDezone;
-    this.boxOutlineLine.material = isRes ? this.boxBorderMatResidential : this.boxBorderMatDezone;
+    if (this.currentMode === 'Residential') {
+      this.boxFillMesh.material = this.boxFillMatResidential;
+      this.boxOutlineLine.material = this.boxBorderMatResidential;
+    } else if (this.currentMode === 'Industrial') {
+      this.boxFillMesh.material = this.boxFillMatIndustrial;
+      this.boxOutlineLine.material = this.boxBorderMatIndustrial;
+    } else {
+      this.boxFillMesh.material = this.boxFillMatDezone;
+      this.boxOutlineLine.material = this.boxBorderMatDezone;
+    }
   }
 
   /**
@@ -338,7 +398,12 @@ export class ZoningManager {
     const minZz = Math.min(this.boxStartZz, this.boxCurrentZz);
     const maxZz = Math.max(this.boxStartZz, this.boxCurrentZz);
 
-    const targetType: ZoneType = this.currentMode === 'Residential' ? 'Residential' : 'None';
+    const targetType: ZoneType =
+      this.currentMode === 'Residential'
+        ? 'Residential'
+        : this.currentMode === 'Industrial'
+        ? 'Industrial'
+        : 'None';
 
     for (let zx = minZx; zx <= maxZx; zx++) {
       for (let zz = minZz; zz <= maxZz; zz++) {
@@ -469,8 +534,8 @@ export class ZoningManager {
         this.cells.set(key, cell);
         validCells.push(cell);
 
-        // 若原先為住宅區，恢復綠色色塊渲染
-        if (zoneType === 'Residential') {
+        // 若原先為住宅區或工業區，恢復色塊渲染
+        if (zoneType === 'Residential' || zoneType === 'Industrial') {
           this.createOrUpdateCellMesh(cell);
         }
       }
@@ -556,18 +621,21 @@ export class ZoningManager {
   }
 
   /**
-   * 為指定小格子建立或更新綠色住宅區色塊
+   * 為指定小格子建立或更新分區色塊 (住宅區綠色 / 工業區琥珀黃)
    */
   private createOrUpdateCellMesh(cell: ZoningCell): void {
-    if (cell.zoneType === 'Residential') {
+    if (cell.zoneType === 'Residential' || cell.zoneType === 'Industrial') {
+      const mat = cell.zoneType === 'Residential' ? this.residentialMat : this.industrialMat;
       if (!cell.mesh) {
-        const mesh = new THREE.Mesh(this.sharedCellGeo, this.residentialMat);
+        const mesh = new THREE.Mesh(this.sharedCellGeo, mat);
         mesh.rotation.x = -Math.PI / 2;
         mesh.position.set(cell.worldX, 0.022, cell.worldZ);
         mesh.receiveShadow = false;
         mesh.castShadow = false;
         this.fillGroup.add(mesh);
         cell.mesh = mesh;
+      } else {
+        cell.mesh.material = mat;
       }
     } else {
       if (cell.mesh) {
@@ -578,7 +646,7 @@ export class ZoningManager {
   }
 
   /**
-   * 對座標進行塗抹操作（指派住宅區或清除）
+   * 對座標進行塗抹操作（指派住宅區、工業區或清除）
    */
   private applyZoningAtWorldPos(worldX: number, worldZ: number, overrideType?: ZoneType): void {
     const zx = Math.floor(worldX / this.CELL_SIZE);
@@ -593,6 +661,8 @@ export class ZoningManager {
         ? overrideType
         : this.currentMode === 'Residential'
         ? 'Residential'
+        : this.currentMode === 'Industrial'
+        ? 'Industrial'
         : 'None';
 
     if (cell.zoneType !== targetType) {
@@ -813,16 +883,20 @@ export class ZoningManager {
   /**
    * 取得所有分區小格子統計資訊
    */
-  public getZoningStats(): { totalCells: number; residentialCount: number } {
+  public getZoningStats(): { totalCells: number; residentialCount: number; industrialCount: number } {
     let residentialCount = 0;
+    let industrialCount = 0;
     for (const cell of this.cells.values()) {
       if (cell.zoneType === 'Residential') {
         residentialCount++;
+      } else if (cell.zoneType === 'Industrial') {
+        industrialCount++;
       }
     }
     return {
       totalCells: this.cells.size,
       residentialCount,
+      industrialCount,
     };
   }
 

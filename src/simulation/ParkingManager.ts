@@ -10,6 +10,8 @@ export interface ParkedCar {
   rotationY: number;
   color: number;
   mesh: THREE.Group;
+  buildingId?: string;
+  residenceVehicleId?: string;
 }
 
 export interface CurbsideSpot {
@@ -315,7 +317,13 @@ export class ParkingManager {
   /**
    * 將開車抵達之車輛模型登記為合法路邊停放車輛 (接管 Mesh，不銷毀)
    */
-  public parkExistingCarMesh(mesh: THREE.Group, spot: CurbsideSpot, colorHex: number): ParkedCar {
+  public parkExistingCarMesh(
+    mesh: THREE.Group,
+    spot: CurbsideSpot,
+    colorHex: number,
+    buildingId?: string,
+    residenceVehicleId?: string
+  ): ParkedCar {
     mesh.position.copy(spot.position);
     mesh.rotation.y = spot.rotationY;
 
@@ -330,15 +338,31 @@ export class ParkingManager {
       rotationY: spot.rotationY,
       color: colorHex,
       mesh,
+      buildingId,
+      residenceVehicleId,
     };
 
     mesh.userData = {
       ...mesh.userData,
       parkedCarId: parkedCar.id,
       isResidentCar: true,
+      buildingId,
+      residenceVehicleId,
     };
     this.parkedCars.set(parkedCar.id, parkedCar);
     return parkedCar;
+  }
+
+  /**
+   * 根據住宅車輛 ID 尋找停放車輛
+   */
+  public getParkedCarByVehicleId(residenceVehicleId: string): ParkedCar | undefined {
+    for (const car of this.parkedCars.values()) {
+      if (car.residenceVehicleId === residenceVehicleId) {
+        return car;
+      }
+    }
+    return undefined;
   }
 
   /**

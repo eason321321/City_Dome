@@ -64,10 +64,11 @@ export interface Building {
   worldPosition: Vector3D;               // 3D 世界座標
   footprint: BuildingFootprint;
   
-  // 容量與住戶/工人
+  // 容量與住戶/工人/車輛
   capacity: number;                      // 最大容納人數
   residentIds: EntityId[];               // 登記於此的市民 ID (若為住宅)
   workerIds: EntityId[];                 // 在此上班的市民 ID (若為商業/工業)
+  registeredVehicleIds?: EntityId[];     // 登記於此住宅之私家車輛 ID (一輛或多輛)
   
   // 經濟與發展
   constructionProgress: number;          // 建造/升級進度 (0.0 - 1.0)
