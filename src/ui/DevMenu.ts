@@ -735,6 +735,9 @@ export class DevMenu {
             <div id="dev-commute-log" style="margin-top: 6px; padding: 6px 8px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; font-size: 11px; color: #cbd5e1; min-height: 48px; max-height: 140px; overflow-y: auto;">
               點選按鈕進行隨機市民上班測試
             </div>
+            <button class="dev-action-btn secondary" id="dev-pedestrian-debug-btn" style="width: 100%; font-size: 11px; padding: 5px 2px; margin-top: 6px;">
+              🚸 切換顯示人行道與斑馬線尋路網格
+            </button>
           </div>
 
           <!-- 低密度工業區建造工具卡片 -->
@@ -1150,6 +1153,26 @@ export class DevMenu {
         }
       }
       this.updateHousingUI();
+    });
+
+    const pedDebugBtn = this.panelContainer.querySelector('#dev-pedestrian-debug-btn');
+    pedDebugBtn?.addEventListener('click', () => {
+      const pedNet = this.roadNetwork.getPedestrianNetwork();
+      const nextActive = !pedNet.isDebugModeActive();
+      pedNet.setDebugVisible(nextActive);
+      if (nextActive) {
+        pedNet.updateDebugVisualization();
+        const stats = pedNet.getStats();
+        pedDebugBtn.textContent = `🚸 人行路網網格【已開啟】(${stats.nodeCount}節點 / ${stats.crosswalkCount}斑馬線)`;
+        pedDebugBtn.classList.remove('secondary');
+        (pedDebugBtn as HTMLElement).style.background = '#0d9488';
+        (pedDebugBtn as HTMLElement).style.color = '#fff';
+      } else {
+        pedDebugBtn.textContent = '🚸 切換顯示人行道與斑馬線尋路網格';
+        pedDebugBtn.classList.add('secondary');
+        (pedDebugBtn as HTMLElement).style.background = '';
+        (pedDebugBtn as HTMLElement).style.color = '';
+      }
     });
 
     // 2.2 工業建築建造按鈕綁定

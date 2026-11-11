@@ -1587,6 +1587,349 @@ $$v_{t} = v_{t-1} + (v_{\text{target}} - v_{t-1}) \times \text{dampFactor}$$
   - 在 T 字路口中，若某一側為無路端（如無東側臂），則 `lane_0_0_E_to_E` 絕對不會生成。
   - 在 T 字路口的丁字主幹突出端（Stem，如西進），因對向完全無東向路塊，因此對向直行流前綴 `_E_to_` 永遠為空，西向進車輛於綠燈時無需遭受不存在的對向虛擬車流阻擋，轉向順暢無阻。
 
+---
+
+### 41. 行人專屬路網拓撲、立體高架人行道與斑馬線 A* 尋路規劃系統 (PedestrianNetwork)
+
+#### 41.1 設計動機與人車分流核心哲學
+- **問題背景**：
+  在前期版本中，市民步行上班誤用車道層級的行車路網（`RoadNetwork.lanes` 與 `Pathfinding.findShortestPath`），導致市民步行於車道正中央（偏移行車線 $0.28\text{m}$、高度 $0.018\text{m}$），不僅視覺上與車流產生穿模碰撞，且在單行道/迴轉道邏輯下產生非自然的步行繞行。
+- **解耦人車網絡架構**：
+  在交通工程與城市模擬中，車道為**單向有向圖**（Directed Lane Graph，受車道劃分、轉彎箭頭、單行規則與迴轉限制管控）；而行人路網本質為**雙向無向圖**（Undirected Sidewalk & Crosswalk Graph，市民可在兩側人行道自由雙向行走，並於路口斑馬線橫越馬路）。
+- **實體與幾何參數對齊**：
+  - 道路寬度：$2.0\text{m} \times 2.0\text{m}$ 網格。
+  - 立體高架人行道頂部面高：$y = 0.07\text{m}$（較車道 $0.035\text{m}$ 抬高 $0.035\text{m}$ 形成立體路緣石階）。
+  - 人行道中心偏離道路中線：$\text{swCenter} = 0.89\text{m}$（覆蓋 $0.78\text{m} \sim 1.00\text{m}$，寬度 $0.22\text{m}$）。
+  - 斑馬線穿越道面高：$y = 0.045\text{m}$（微抬高於車道 $0.035\text{m}$，確保市民腳底與枕木紋精確咬合防穿模）。
+
+#### 41.2 多路型行人拓撲生成機制
+1. **直線道路 (`Straight`) 與盡頭路段 (`DeadEnd`)**：
+   - 兩側平行鋪設雙向人行道（Side A 位於局部 $x = -0.89$，Side B 位於局部 $x = +0.89$）。
+   - 每側配置 3 點拓撲（入口邊界 $z = -1.0$、中間節點 $z = 0.0$、出口邊界 $z = +1.0$）。
+   - 在盡頭路段（`DeadEnd`）之無路端點，自動生成行人橫跨路底之穿越道，確保死巷底部兩側人行道雙向連通。
+2. **十字路口 (`FourWay`)**：
+   - 四個轉角處配置人行廣場小平台（NW、NE、SW、SE，局部座標 $(\pm 0.89, \pm 0.89)$）。
+   - 轉角小平台向外無縫接合相鄰四面路塊邊界的人行道端點。
+   - 橫跨四個路口切面生成 4 處斑馬線行人穿越道（標記 `isCrosswalk: true`），中間點採樣對齊純白枕木紋。
+3. **T 字路口 (`ThreeWay`)**：
+   - 無路開口側（如基準西側）生成全長 $2.0\text{m}$ 連續直通高架人行道（5 點連續序列），車輛無法轉入但行人暢行無阻。
+   - 支線開口側配置 2 座角落平台，並生成 3 處路口斑馬線穿越道（直道兩端與支線進入處）。
+4. **90度彎道 (`Corner`)**：
+   - 外側轉角（西側至北側）生成 5 節點平滑弧形轉彎人行道。
+   - 內側轉角（東南角）生成內側轉折平台，完美縫合相鄰道路內外兩側動線。
+
+#### 41.3 跨路塊毫米級節點融合 (Millimeter-Quantized Node Stitching)
+- **接縫問題與傳統斷裂**：
+  若每塊道路獨立持有節點，路塊接縫處端點座標極微小浮點數誤差（如 $1.0000001$ vs $0.9999999$）會導致圖遍歷斷裂。
+- **量化哈希鍵值公式**：
+  $$\text{nodeKey}(x, z) = \text{"p\_"} + \text{round}(x \times 100) / 100 + \text{"\_"} + \text{round}(z \times 100) / 100$$
+- **自動縫合保證**：
+  路塊 A 的南邊界西側端點 $(gx - 0.89, 0.07, gz + 1.0)$ 與相鄰路塊 B 的北邊界西側端點 $(gx - 0.89, 0.07, (gz + 2) - 1.0)$ 在量化哈希下具有**完全相同的鍵值**。全城數百格道路於圖構建完成瞬間，相鄰人行道自動縫合為單一連通圖，無需昂貴的鄰接重疊搜索。
+
+#### 41.4 行人 A* 搜尋與斑馬線阻抗模型
+- **A* 權重函數**：
+  $$g(v) = g(u) + d(u, v) + P_{\text{crosswalk}}$$
+  其中 $P_{\text{crosswalk}} = 0.8\text{m}$（若該邊為穿越車道之斑馬線，施加 $+0.8\text{m}$ 等效通行阻抗）。
+- **工程效果**：
+  - **同側通行**：若起點與終點位於街道同一側，A* 優先沿本側人行道直通，絕對不會在沒有必要時隨機橫跨馬路到對面再橫跨回來。
+  - **跨街需求**：若目標位於對側，A* 自動選用距離最近之路口斑馬線過街，路徑自然、美觀且符合人類步行習慣。
+
+#### 41.5 門對門人行動線 (Door-to-Door Pedestrian Routing)
+- **航點五階段流水線**：
+  1. `homeDoor`：住宅房門口（$y = 0.04\text{m}$）。
+  2. `homeGate`：住宅庭院圍欄大門（$y = 0.07\text{m}$，對接人行道路緣）。
+  3. `sidewalkEntry -> ... -> sidewalkExit`：A* 最短人行路網動線（含轉角小平台與斑馬線，$y = 0.07\text{m}$ 與 $0.045\text{m}$）。
+  4. `factoryGate`：工廠廠區外大門（$y = 0.07\text{m}$）。
+  5. `factoryDoor`：工廠作業廠房大門（$y = 0.04\text{m}$）。
+- **動態微步防抖**：
+  通過 `deduplicateWaypoints` 自動過濾點間距小於 $0.03\text{m}$ 之微小接縫點，防止市民行進時發生角度微顫。
+
+---
+
+### 42. 行人號誌感知狀態機與轉彎車輛禮讓行人防死鎖機制 (Pedestrian Signal & Turn-Yield Deadlock Prevention)
+
+#### 42.1 行人號誌幾何映射與對稱控制原理
+- **路口號誌相位**：
+  路口紅綠燈擁有兩個主相位：`northSouth`（南北向車流通行）與 `eastWest`（東西向車流通行）。
+- **斑馬線橫跨幾何與受控號誌相推導**：
+  - **橫跨北/南口切面（Arm 'N' / 'S'，即 $Z \approx gz \pm 0.89$）**：
+    橫切南北向車道。當南北向車流為紅燈時（即 `eastWest` 綠燈），該斑馬線安全放行；故北/南斑馬線行人號誌綠燈相綁定為 `eastWest`。
+  - **橫跨東/西口切面（Arm 'E' / 'W'，即 $X \approx gx \pm 0.89$）**：
+    橫切東西向車道。當東西向車流為紅燈時（即 `northSouth` 綠燈），該斑馬線安全放行；故東/西斑馬線行人號誌綠燈相綁定為 `northSouth`。
+- **幾何判定公式**：
+  $$\Delta x = P_{\text{crosswalk}}.x - gx, \quad \Delta z = P_{\text{crosswalk}}.z - gz$$
+  $$\text{if } |\Delta z| > |\Delta x| \implies \text{arm} = (\Delta z < 0 ? \text{'N'} : \text{'S'}), \quad \text{signal} = \text{'eastWest'}$$
+  $$\text{else} \implies \text{arm} = (\Delta x < 0 ? \text{'W'} : \text{'E'}), \quad \text{signal} = \text{'northSouth'}$$
+
+#### 42.2 行人紅綠燈停等狀態機
+- **路緣石判定點**：
+  當行人抵達人行道路緣石（`currentWaypointIndex` 指向斑馬線航點且當前未進入過馬路狀態 `!ped.isCrossingCrosswalk`）：
+  1. 檢驗該斑馬線所屬路口之受控號誌狀態：`signalState[pedestrianSignal]`。
+  2. 若 `signal !== 'green'`（紅燈或黃燈）：
+     - 設定 `ped.isWaitingLight = true; ped.isCrossingCrosswalk = false;`。
+     - 呼叫 `CitizenModelFactory.resetCitizenPose(ped.mesh)` 重置為雙腿立正之自然停等姿態。
+     - 旋轉朝向斑馬線目標點，本幀不前進位移，不累積 `walkTimer`。
+  3. 若 `signal === 'green'`（綠燈）：
+     - 設定 `ped.isWaitingLight = false; ped.isCrossingCrosswalk = true;`。
+     - 紀錄目前穿越之 `crossingIntersectionKey` 與 `crossingArm`。
+     - 市民踏上斑馬線邁步過街。
+  4. 穿越過程中號誌變色保護：
+     - 行人一旦踏入斑馬線，即進入穿越馬路中狀態，不因號誌中途變黃/變紅而滯留在車道中央。
+     - 登上對側人行道後，下一航點 `isCrosswalk === false`，自動重置 `ped.isCrossingCrosswalk = false`。
+
+#### 42.3 轉彎車輛禮讓行人與路口外部防死鎖機制 (Turn-Yield & Deadlock Prevention)
+- **衝突場景**：
+  南北向車輛綠燈放行時，若車輛右轉進入東口（`lane_N_to_E`），東口斑馬線橫跨東西向，此時東西向車流紅燈，行人號誌為綠燈，市民正合法橫越東口斑馬線。車輛轉入時會直接衝撞斑馬線上的行人。
+- **傳統進入後煞停的死鎖缺陷 (Box Block Deadlock)**：
+  若轉彎車在駛入路口內部後才發現斑馬線有人而停在路口中央，車尾將橫阻直行車道，引發整個路口十字/T字網格車流連環鎖死（Gridlock）。
+- **外部停止線制動解決方案**：
+  - **前瞻轉向探測**：
+    車輛在接近路口停止線時，從前方路徑中解析路口轉向車道之 `fromDir` 與 `toDir`。
+    若 `fromDir !== toDir` 且非直行（即右轉、左轉或迴轉），判定為轉向車輛。
+  - **目標路口臂行人跨越查詢**：
+    調用 `buildingManager.isPedestrianCrossingCrosswalk(stopWp.intersectionKey, toDir)`。
+    若目標臂之斑馬線上有行人正在穿越：
+    $$v.\text{isYieldingToPedestrian} = \text{true}$$
+    $$\text{mustHoldAtStopLine} = \text{true}$$
+  - **停止線外絕對禁止駛入**：
+    轉彎車強制在**路口停止線前煞停停等**，完全禁止進入路口內部，路口黃網線內部空間保持 100% 淨空。直行車輛可順暢通行，對向車流亦不受任何干擾。
+  - **行人放行起步**：
+    行人全數通過斑馬線登上對側人行道後，`isPedestrianCrossingCrosswalk` 回傳 `false`，轉彎車解除管制，平滑加速駛入路口並完成轉彎。
+- **近距離防撞備援 (Proximity Safety Fallback)**：
+  在車輛行駛中（包括車輛已在路口內或直行遇突發狀況），配合 `findPedestrianAhead(vehiclePos, headingY, 2.2)` 錐體前向檢測，若車頭前方 $2.2\text{m}$ 內有行人橫越，主動緊急減速避讓，確保行車絕對安全。
+
+---
+
+### 43. 外環道路進城車輛雙向隨機進入機制 (Bilateral Random Inbound Traffic Mechanism)
+
+#### 43.1 原單向進入之成因診斷
+- **外環公路佈局**：
+  地圖南界 $Z = 97$ 橫貫東西聯外公路，西端起點入口為 `lane_-99_97_E`（$X = -99$ 向東行駛），東端起點入口為 `lane_99_97_W`（$X = 99$ 向西行駛）。
+- **原先演算法的距離短路偏斜 (Shortest-Distance Deterministic Bias)**：
+  在原 `dispatchCitizenVehicle` 實作中：
+  ```typescript
+  if (westEntry) {
+    const pW = Pathfinding.findShortestPath(westEntry.id, lane.id, allLanes);
+    if (pW && pW.routeWaypoints && pW.routeWaypoints.length >= 2) lanePath = pW;
+  }
+  if (eastEntry) {
+    const pE = Pathfinding.findShortestPath(eastEntry.id, lane.id, allLanes);
+    if (pE && pE.routeWaypoints && pE.routeWaypoints.length >= 2) {
+      if (!lanePath || pE.totalDistance < lanePath.totalDistance) lanePath = pE;
+    }
+  }
+  ```
+  當城市與外環公路交會於特定的路口（例如中央偏西或偏東之道路）時，由西側進口行駛至該路口的距離 $D_{\text{West}}$ 與由東側進口行駛至該路口的距離 $D_{\text{East}}$ 乃靜態決定。若 $D_{\text{West}} < D_{\text{East}}$，則 `pE.totalDistance < lanePath.totalDistance` 永遠為 `false`，導致所有車輛 100% 確定性自西側湧入；反之亦然。
+
+#### 43.2 雙向路徑解耦評估與隨機決策架構
+- **兩端入口獨立尋路評估器 (`findBestPathForEntry`)**：
+  將西側進口與東側進口之導航計算徹底解耦，分別獨立評估從該入口駛往目的地路塊的可用路徑，區分「首選停車側車道（`isPreferred: true`）」與「備援退回車道（`isPreferred: false`）」：
+  ```typescript
+  const westResult = findBestPathForEntry(westEntry);
+  const eastResult = findBestPathForEntry(eastEntry);
+  ```
+- **雙向隨機權重決策 (Stochastic Entrance Selection)**：
+  1. **兩側均具備相同優先級（正常雙向連通環境）**：
+     若 `westResult.isPreferred === eastResult.isPreferred`，表示西側與東側皆能順利開入順向停車車道（或皆退回次選車道），此時以 50% 等機率均勻隨機選擇：
+     $$\text{bestPath} = (\text{Math.random()} < 0.5) \; ? \; \text{westResult.path} : \text{eastResult.path}$$
+  2. **單側優先級較優（路緣方向約束）**：
+     若僅其中一側路網拓撲能順向停靠首選車道，以具備順向停車優勢者優先，確保車輛順行靠邊入位體驗不劣化。
+  3. **非對稱/單向連通備援**：
+     若玩家拆除某一路段或建造單向道路致使僅一側可通，`westResult` 或 `eastResult` 其中之一為 `null`，則系統平滑降級採用唯一可行者，絕不發生派車失敗或遷入停滯。
+- **全域外聯進城車道統一隨機化 (`RoadNetwork.getExternalSpawnLane`)**：
+  同步修正 `RoadNetwork` 的公開介面 `getExternalSpawnLane()`，當西側與東側入口均存在時，隨機選取西向或東向車道回傳，消除全局任何潛在的單側固定偏斜。
 
 
 
+---
+
+### 44. 行人上車行人尋路系統與路緣登車動線架構 (Pedestrian Boarding Pathfinding Architecture)
+
+#### 44.1 原始直線斜切缺陷診斷 (Straight-Line Diagonal Walk Defect)
+- **問題現象**：
+  在早期通勤實作中，當市民選擇開車通勤時，系統以：
+  ```typescript
+  const walkToCarWaypoints = [
+    homeBuilding.frontWorldPos.clone(),
+    carSpotPos.clone(),
+  ];
+  ```
+  直接產生兩點直線位移，且缺乏 `routeWaypoints` 號誌屬性。
+- **物理不合理性**：
+  路邊停車位往往因門前滿位而向外擴展搜尋至鄰近街區或對向車道。當車輛停放在數公尺甚至數十公尺外時，市民直接以直線斜切穿透鄰家建築地塊、草皮與機動車道走至車輛，既無視人行道幾何，亦無視十字路口紅綠燈管制與轉彎車輛禮讓，視覺嚴重穿模且違反交通邏輯。
+
+#### 44.2 登車尋路演算法與幾何吸附 (`findPathToCar`)
+1. **起點門對門序列 (Door-to-Gate)**：
+   - 起點房門 (`homeDoor`)：自建築幾何中心向正門內插 $0.45$，高度 $y = 0.04\text{m}$。
+   - 外庭大門 (`homeGate`)：建築外側臨路點，高度提升至立體高架人行道高度 $y = 0.07\text{m}$。
+2. **路緣車側上車點投影計算 (Curb-to-Sidewalk Projection)**：
+   車輛中心停靠於路緣石旁（車身中心距道路中線 $0.62\text{m}$），人行道中心距道路中線為 $0.89\text{m}$，橫向位移差值恰為：
+   $$\Delta_{\text{offset}} = 0.89\text{m} - 0.62\text{m} = 0.27\text{m}$$
+   依車位方位 `side` 精準投影至人行道幾何中心：
+   $$\text{sidewalkBoarding} = \begin{cases}
+     (x - 0.27, 0.07, z) & \text{side = 'west'} \\
+     (x + 0.27, 0.07, z) & \text{side = 'east'} \\
+     (x, 0.07, z - 0.27) & \text{side = 'north'} \\
+     (x, 0.07, z + 0.27) & \text{side = 'south'}
+   \end{cases}$$
+3. **立體人行道 A* 尋路與邊緣吸附**：
+   - 透過 `preferSidewalkEnds: true`，在 `findClosestNode` 中過濾掉位於車道中央之斑馬線節點，確保起點與終點精準吸附於人行道邊緣。
+   - 調用 `findShortestPath(homeGate, sidewalkBoarding)`，自動跨越多個路塊、繞行直角轉彎道，並在跨越路口時依循斑馬線拓撲。
+4. **登車步降 (Step-down to Vehicle)**：
+   在序列終端追加車輛底盤門邊登車點 `carBoarding` ($y = 0.02\text{m}$)，使行人於人行道側抵達車旁後，邁步下階登入車身，隨後觸發 `onArrivedDestination`，達成無縫開車出發。
+5. **去重與號誌繼承 (Deduplication & Signal Preservation)**：
+   相鄰小於 $0.03\text{m}$ 之過近航點自動融合，同時完整保留 `isCrosswalk`、`isCrosswalkStart`、`intersectionKey`、`crosswalkArm` 與 `pedestrianSignal` 號誌相屬性。
+
+#### 44.3 號誌聯動與安全禮讓整合 (Signal & Yielding Integration)
+- **紅綠燈停等**：
+  若市民走向車輛途中需穿越馬路，抵達路緣石時若號誌為紅燈，市民自動觸發 `ped.isWaitingLight = true` 於路緣停等，綠燈放行後方踏入斑馬線橫越。
+- **轉彎車輛防撞禮讓**：
+  行人於過馬路期間處於 `ped.isCrossingCrosswalk = true`，轉彎車輛在路口停止線檢測到有行人正走向車輛穿越該路口臂斑馬線時，強制在停止線前停等，徹底避免路口死鎖與碰撞穿模。
+- **下車進廠對稱尋路 (`findPathFromCarToBuilding`)**：
+  同步實作車輛抵達工廠停車後，市民自停靠車側登臨人行道、沿人行道尋路安全進入工廠之對稱尋路機制。
+
+
+---
+
+### 45. 靠右行駛路邊車位起步與目的地停車判定架構 (Right-Hand Traffic Curbside Departure & Arrival Architecture)
+
+#### 45.1 瞬移缺陷診斷 (Cross-Lane Teleportation Defects)
+1. **起步出發跨車道瞬移 (Departure Teleportation)**：
+   - 舊版 `findBestRoadPath` 遍歷出發地路塊的所有車道，挑選到達目的地 A* 距離最短的車道。
+   - 若車輛停放於西側路緣（朝南），目的地工廠位於北方，系統判定北向車道（東側）距離最短，因此讓車輛直接自東側北向車道起步，造成市民一上車，車身瞬間橫越對向車道與雙黃線瞬移。
+   - 舊版導航路徑以車道起點為首個節點，當車位位於車道中段或前段時，車身會往後瞬移回車道端點。
+2. **抵達停車逆向跨車道瞬移 (Arrival Teleportation)**：
+   - 舊版車輛抵達工廠路塊時，`findClosestAvailableSpot(frontWorldPos)` 僅以幾何歐氏距離評估車位。
+   - 若工廠位於道路對側（左側），西側車位離工廠大門最近，系統直接回傳西側車位，使順向（東側）行駛的車輛瞬間橫越對向車道雙黃線停入西側，且車頭 180 度逆向調頭，嚴重違反交通法規。
+
+#### 45.2 靠右行駛方向與路緣幾何雙向對應模型
+- **行駛方向 $\to$ 順向合法路緣 (`getRightSideForDirection`)**：
+  靠右行駛規則下，車道右側路緣公式定義如下：
+  $$\text{RightSide}(\vec{D}) = \begin{cases}
+    \text{'east'} & \vec{D} = \text{'N'} \; (Z < 0) \\
+    \text{'west'} & \vec{D} = \text{'S'} \; (Z > 0) \\
+    \text{'south'} & \vec{D} = \text{'E'} \; (X > 0) \\
+    \text{'north'} & \vec{D} = \text{'W'} \; (X < 0)
+  \end{cases}$$
+- **路緣方位 $\to$ 順向起步車道 (`getDirectionForSide`)**：
+  $$\text{StartDirection}(S) = \begin{cases}
+    \text{'S'} & S = \text{'west'} \\
+    \text{'N'} & S = \text{'east'} \\
+    \text{'W'} & S = \text{'north'} \\
+    \text{'E'} & S = \text{'south'}
+  \end{cases}$$
+- **目標建築方位 $\to$ 偏好順行車道 (`getPreferredArrivalDirection`)**：
+  依據目標建築正面座標 $(P_x, P_z)$ 與道路中心 $(G_x, G_z)$ 相對幾何位置，推算可讓車位直接位於建築同側之偏好抵達車道：
+  $$\text{PreferredGoalDir} = \begin{cases}
+    (P_x < G_x) \; ? \; \text{'S'} : \text{'N'} & \text{南北向道路} \\
+    (P_z < G_z) \; ? \; \text{'W'} : \text{'E'} & \text{東西向道路}
+  \end{cases}$$
+
+#### 45.3 起步車位平滑匯入演算法 (`attachCurbsideDeparture`)
+- **零瞬移起點錨定**：
+  將路徑第 0 個節點設定為車輛目前實際停放座標 $\mathbf{P}_{\text{spot}}$（$y=0.04\text{m}$）。
+- **後方節點剪枝與順向匯入**：
+  計算出發車道每個路徑節點 $\mathbf{W}_i$ 相對於車位的位置向量在行進方向單位向量 $\hat{\mathbf{v}}_{\text{dir}}$ 上的投影距離：
+  $$d_{\text{forward}} = (\mathbf{W}_i - \mathbf{P}_{\text{spot}}) \cdot \hat{\mathbf{v}}_{\text{dir}}$$
+  - 若 $d_{\text{forward}} \le 0.25\text{m}$，表示該節點位於車身後方或緊鄰車身，直接剃除，防止車輛倒退跳躍。
+  - 保留前方首個節點 $\mathbf{W}_{\text{ahead}}$，車輛自車位順滑斜向匯入前進車道。
+
+#### 45.4 目的地靠右行駛嚴格停車約束
+- **抵達向量檢測**：
+  在車輛到達回調 `onArrived(arrivedVeh)` 中，由最終兩個航點 $\mathbf{W}_{n-1} \to \mathbf{W}_n$ 計算位移向量 $\Delta \mathbf{P}$，判定車輛最終行駛方向 $\vec{D}_{\text{final}}$。
+- **單側車位嚴格過濾**：
+  $$\text{allowedParkingSide} = \text{RightSide}(\vec{D}_{\text{final}})$$
+  呼叫 `findClosestAvailableSpot(homePos, preferredTileKey, allowedParkingSide)`，內部僅搜尋 `side === allowedParkingSide` 之車位。
+- **對側停車安全步行穿越**：
+  若車輛因單向道或無迴轉機會而在工廠對側車道抵達，車輛僅能停於其行駛方向之右側車位。市民下車後，透過 `PedestrianNetwork.findPathFromCarToBuilding` 經斑馬線與號誌安全橫越馬路進入工廠，既符合真實交通行為，亦展現立體人行步道網絡的連通價值。
+
+
+---
+
+### 46. 靠右行駛路邊車位平滑進場泊車動線演算法 (Curbside Arrival Smooth Parking Transition Algorithm)
+
+#### 46.1 停車瞬移問題診斷 (Arrival Instantaneous Teleportation Defect)
+- **現象**：車輛沿車道到達目的地終點（車道 exitPoint）後，系統以 `parkExistingCarMesh` 強制 `mesh.position.copy(spot.position)`。車輛自車道中央瞬間橫移 30cm 跳入路緣車位，缺乏真車轉向靠邊與減速進場之過渡感。
+- **目標**：實現如出發上路般流暢的「由行車道斜向切出 $\to$ 平滑進入路邊車位 $\to$ 回正停妥」之過渡畫面。
+
+#### 46.2 四階幾何泊車路徑生成演算法 (`attachCurbsideArrival`)
+以靠右行駛為基準，設行駛方向單位向量為 $\hat{\mathbf{v}}_{\text{dir}} = (d_x, 0, d_z)$，則指向車道右側路緣之法向量為：
+$$\hat{\mathbf{v}}_{\text{lat}} = (-d_z, 0, d_x)$$
+車道中心線與路邊車位中心之橫向淨距為：
+$$W_{\text{lat}} = \Delta_{\text{curb}} - \Delta_{\text{lane}} = 0.62\text{m} - 0.325\text{m} = 0.295\text{m}$$
+車位正對之車道中心線基準點為：
+$$\mathbf{P}_{\text{laneAtSpot}} = \mathbf{P}_{\text{spot}} - \hat{\mathbf{v}}_{\text{lat}} \cdot W_{\text{lat}}$$
+
+路徑由四個幾何控制點構成：
+1. **車道切入點 (Turn-in Point, $\mathbf{P}_{\text{turnIn}}$)**：
+   在車位前方 $L_{\text{lead}} = 0.65\text{m}$ 處，位於車道中心線上：
+   $$\mathbf{P}_{\text{turnIn}} = \mathbf{P}_{\text{laneAtSpot}} - \hat{\mathbf{v}}_{\text{dir}} \cdot 0.65$$
+2. **斜向進場過渡點 (Diagonal Entry Point, $\mathbf{P}_{\text{mid}}$)**：
+   前進至距離車位約 $0.30\text{m}$ 處，橫向朝路緣偏移 55% ($0.16\text{m}$)，形成 $\approx 25^\circ$ 斜切角：
+   $$\mathbf{P}_{\text{mid}} = \mathbf{P}_{\text{laneAtSpot}} - \hat{\mathbf{v}}_{\text{dir}} \cdot (0.65 \times 0.45) + \hat{\mathbf{v}}_{\text{lat}} \cdot (W_{\text{lat}} \times 0.55)$$
+3. **路緣平行對齊點 (Curb Alignment Point, $\mathbf{P}_{\text{align}}$)**：
+   車身已達路緣泊車軌道（橫向偏移 100%），距最終停車點 $0.12\text{m}$：
+   $$\mathbf{P}_{\text{align}} = \mathbf{P}_{\text{spot}} - \hat{\mathbf{v}}_{\text{dir}} \cdot 0.12$$
+   從 $\mathbf{P}_{\text{align}} \to \mathbf{P}_{\text{spot}}$ 之行進向量為 $\hat{\mathbf{v}}_{\text{dir}} \cdot 0.12$，橫向偏移為 0，確保車輛在進入車位最後 12cm 時車頭完全回正與道路平行。
+4. **最終停車位 (Final Parking Spot, $\mathbf{P}_{\text{spot}}$)**：
+   $$\mathbf{P}_{\text{spot}} = \text{parkSpot.position}$$
+
+#### 46.3 超前節點剪除防倒退機制 (Overshoot Pruning)
+在原有行車導航路徑中，遍歷航點 $\mathbf{W}_i$，計算其相對於 $\mathbf{P}_{\text{turnIn}}$ 在前進方向之投影距離：
+$$d_i = (\mathbf{W}_i - \mathbf{P}_{\text{turnIn}}) \cdot \hat{\mathbf{v}}_{\text{dir}}$$
+若 $d_i \ge -0.1\text{m}$，表示該航點已位於切入點前方或同處，直接予以剪除，防止車輛行駛至車道盡頭後再倒車進入車位。剪除後串接四階泊車控制點，形成單調向前推進的連續軌跡。
+
+#### 46.4 泊車平滑減速動力學 (Arrival Creep Deceleration)
+在 `VehicleManager` 運動更新迴圈中，探測車輛距路徑終點之剩餘累積曲線距離 $D_{\text{remaining}}$：
+$$v_{\text{arrival}} = \begin{cases}
+  v_{\text{target}} & D_{\text{remaining}} \ge 3.2\text{m} \\
+  \max\left(1.8\text{ m/s}, \; \sqrt{2 \cdot (0.7 \cdot a_{\text{decel}}) \cdot D_{\text{remaining}}}\right) & D_{\text{remaining}} < 3.2\text{m}
+\end{cases}$$
+使車輛在最後 3.2m 內平滑制動，降至 $1.8\text{ m/s}$（約 $6.5\text{ km/h}$）之怠速爬行狀態，優雅順滑地靠邊入庫停妥。
+
+
+---
+
+### 47. 導航路徑過度剪除修復與全路網節點防禦架構 (Navigation Route Pruning Fix & Full Roadway Preservation Architecture)
+
+#### 47.1 直線飛越缺陷機制剖析 (Straight-Line Flyover Defect Analysis)
+- **錯誤代碼模式**：
+  在過渡性泊車銜接演算法中，原設計意圖為在目的地車道剔除超過切入點的節點。然而遍歷係自 $i=0$（路線起點，如高速公路或遠程住宅）開始：
+  ```typescript
+  for (let i = 0; i < drivePath.routeWaypoints.length; i++) {
+    const toTurnIn = wp.position - turnInPoint;
+    if (toTurnIn.dot(dirVec) >= -0.1) break; // BUG: 全局座標點乘目標車道方向！
+    newRwps.push(wp);
+  }
+  ```
+- **幾何崩潰原因**：
+  $\hat{\mathbf{v}}_{\text{dir}}$ 是「目標車道」的方向向量。當起點座標與終點座標在該向量上的投影大於 0 時（如目標車道向南 $\hat{\mathbf{v}}_{\text{dir}}=(0,0,1)$，而起點高速公路在南側 $Z=97$，終點在 $Z=5$）：
+  $$(\mathbf{W}_0 - \mathbf{P}_{\text{turnIn}}) \cdot \hat{\mathbf{v}}_{\text{dir}} = (97 - 4.35) \times 1 = 92.65 \ge -0.1$$
+  迴圈在第 0 步即刻 `break`！
+  原本由 A* 演算法生成的幾十個道路導航節點全部丟失，路徑被強制截斷為：
+  $$\text{newRwps} = [\mathbf{W}_0, \mathbf{P}_{\text{turnIn}}, \mathbf{P}_{\text{mid}}, \mathbf{P}_{\text{align}}, \mathbf{P}_{\text{spot}}]$$
+  車輛從起點 $\mathbf{W}_0$ 沿直線無視道路直接飛向 $\mathbf{P}_{\text{turnIn}}$，穿透地圖所有建築！
+
+#### 47.2 基於車道識別的隔離防禦架構 (Lane-Isolated Boundary Defense)
+- **終點車道隔離原則 (Destination Lane Isolation)**：
+  路邊泊車進場動線僅允許作用於「目的地車道」內部。在抵達目的地車道前之所有航點（無論沿途轉向幾次、繞行幾個街區、行經高速公路與否），100% 視為不可觸碰之歷史主幹路徑：
+  ```typescript
+  const destLaneId = rwps[rwps.length - 1].laneId;
+  const firstDestLaneIdx = rwps.findIndex((w) => w.laneId === destLaneId);
+  const prefixEnd = firstDestLaneIdx !== -1 ? firstDestLaneIdx : rwps.length - 1;
+
+  // 1. 歷史主幹路徑 100% 完整保留
+  for (let i = 0; i < prefixEnd; i++) {
+    newRwps.push(rwps[i]);
+  }
+
+  // 2. 僅在終點車道內部篩選超過切入點之節點
+  if (firstDestLaneIdx !== -1) {
+    for (let i = firstDestLaneIdx; i < rwps.length; i++) {
+      if ((rwps[i].position - turnInPoint).dot(dirVec) >= -0.15) break;
+      newRwps.push(rwps[i]);
+    }
+  }
+  ```
+- **起步車道隔離原則 (Origin Lane Isolation)**：
+  同理，車位起步切出動線僅允許在「起步車道」內部剔除車身後方節點。一旦車輛駛離起步車道標記（`hasExitedStartLane = true`），後續沿途所有車道節點一概完整保留，絕不允許因投影方向不符而將整條路線截斷為端點直線。

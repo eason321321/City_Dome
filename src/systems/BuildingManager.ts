@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { BuildingModelFactory, BuildingMetadata } from '../rendering/BuildingModelFactory';
 import { ZoningManager, ZoneType } from './ZoningManager';
-import { RoadNetwork } from './RoadNetwork';
+import { RoadNetwork, DirectedLane } from './RoadNetwork';
 import { Pathfinding, PathResult, RouteWaypoint } from './Pathfinding';
+import { PedestrianNetwork, PedestrianWaypoint } from './PedestrianNetwork';
 import { VehicleManager } from '../simulation/VehicleManager';
 import { ParkingManager, CurbsideSpot } from '../simulation/ParkingManager';
 import { CitizenModelFactory } from '../rendering/CitizenModelFactory';
@@ -116,6 +117,11 @@ export interface MovingInPedestrian {
   spawnDelay: number;
   currentWaypointIndex: number;
   waypoints: THREE.Vector3[];
+  routeWaypoints?: PedestrianWaypoint[];
+  isWaitingLight?: boolean;
+  isCrossingCrosswalk?: boolean;
+  crossingIntersectionKey?: string;
+  crossingArm?: 'N' | 'S' | 'E' | 'W';
   speed: number;
   walkTimer: number;
   isAlighted: boolean;
@@ -182,6 +188,7 @@ export class BuildingManager {
   private activePedestrians: MovingInPedestrian[] = [];
   private pedestrianContainer: THREE.Group;
   private nextCitizenId: number = 1;
+  private pedestrianNetwork: PedestrianNetwork;
 
   // 住房需求統計與佇列清單 (需求清單最新在最上方)
   private demandQueue: HousingDemand[] = [];
@@ -211,6 +218,7 @@ export class BuildingManager {
     this.zoningManager = zoningManager;
     this.roadNetwork = roadNetwork;
     this.vehicleManager = vehicleManager;
+    this.pedestrianNetwork = roadNetwork.getPedestrianNetwork();
 
     this.buildingsContainer = new THREE.Group();
     this.buildingsContainer.name = 'BuildingsContainer';
@@ -226,6 +234,10 @@ export class BuildingManager {
 
   public setParkingManager(parkingManager: ParkingManager): void {
     this.parkingManager = parkingManager;
+  }
+
+  public getPedestrianNetwork(): PedestrianNetwork {
+    return this.pedestrianNetwork;
   }
 
   // ==========================================
@@ -1338,6 +1350,46 @@ export class BuildingManager {
       const wps = ped.waypoints;
       if (ped.currentWaypointIndex < wps.length) {
         const targetPos = wps[ped.currentWaypointIndex];
+        const targetWp = ped.routeWaypoints ? ped.routeWaypoints[ped.currentWaypointIndex] : null;
+
+        // 號誌檢測：若行人即將踏上斑馬線（當前尚未進入該斑馬線穿越狀態，或是轉換至不同路口臂之斑馬線）
+        if (targetWp && targetWp.isCrosswalk && (!ped.isCrossingCrosswalk || targetWp.crosswalkArm !== ped.crossingArm)) {
+          const interKey = targetWp.intersectionKey;
+          const signalPhase = targetWp.pedestrianSignal;
+          if (interKey && signalPhase) {
+            const inter = this.roadNetwork.getIntersection(interKey);
+            if (inter) {
+              const signal = inter.signalState[signalPhase];
+              if (signal !== 'green') {
+                // 行人號誌非綠燈（紅燈或黃燈）：在路緣石安全停等
+                ped.isWaitingLight = true;
+                ped.isCrossingCrosswalk = false;
+                ped.crossingIntersectionKey = undefined;
+                ped.crossingArm = undefined;
+                CitizenModelFactory.resetCitizenPose(ped.mesh);
+                const toTarget = new THREE.Vector3().subVectors(targetPos, ped.mesh.position);
+                toTarget.y = 0;
+                if (toTarget.lengthSq() > 0.001) {
+                  ped.mesh.rotation.y = Math.atan2(toTarget.x, toTarget.z);
+                }
+                continue; // 停等不前進，不驅動走路動畫
+              }
+            }
+          }
+
+          // 行人號誌為綠燈：獲准踏上斑馬線開始過馬路
+          ped.isWaitingLight = false;
+          ped.isCrossingCrosswalk = true;
+          ped.crossingIntersectionKey = targetWp.intersectionKey;
+          ped.crossingArm = targetWp.crosswalkArm;
+        } else if (targetWp && !targetWp.isCrosswalk && ped.isCrossingCrosswalk) {
+          // 已完全穿過斑馬線並登上對側人行道：解除穿越馬路狀態
+          ped.isCrossingCrosswalk = false;
+          ped.crossingIntersectionKey = undefined;
+          ped.crossingArm = undefined;
+          ped.isWaitingLight = false;
+        }
+
         const toTarget = new THREE.Vector3().subVectors(targetPos, ped.mesh.position);
         toTarget.y = 0; // 平面步行
         const dist = toTarget.length();
@@ -1358,7 +1410,11 @@ export class BuildingManager {
         ped.walkTimer += deltaTime;
         CitizenModelFactory.animateCitizenWalk(ped.mesh, ped.walkTimer, 7.8, 1.0);
       } else {
-        // 已走入屋內/廠內：市民正式進屋，移除 3D 模型
+        // 已走入屋內/廠內：市民正式進屋，解除過路狀態並移除 3D 模型
+        ped.isCrossingCrosswalk = false;
+        ped.crossingIntersectionKey = undefined;
+        ped.crossingArm = undefined;
+        ped.isWaitingLight = false;
         ped.hasEnteredHouse = true;
         if (ped.mesh) {
           this.pedestrianContainer.remove(ped.mesh);
@@ -1492,19 +1548,13 @@ export class BuildingManager {
     const eastEntry = this.roadNetwork.getHighwayEastEntryLane();
 
     let bestPath: PathResult | null = null;
-    let bestDistToTarget = Infinity;
 
     // 若有車位，優先匹配停車側對應方位之車道 (確保車輛順行靠邊)
     // 西側路緣: 南向(S); 東側路緣: 北向(N); 北側路緣: 西向(W); 南側路緣: 東向(E)
     let candidateLanes = roadTile.lanes;
     if (parkingSpot) {
-      const preferred = roadTile.lanes.filter((l) => {
-        if (parkingSpot!.side === 'west') return l.direction === 'S';
-        if (parkingSpot!.side === 'east') return l.direction === 'N';
-        if (parkingSpot!.side === 'north') return l.direction === 'W';
-        if (parkingSpot!.side === 'south') return l.direction === 'E';
-        return false;
-      });
+      const preferredDir = ParkingManager.getDirectionForSide(parkingSpot.side);
+      const preferred = roadTile.lanes.filter((l) => l.direction === preferredDir);
       if (preferred.length > 0) {
         candidateLanes = preferred;
       }
@@ -1512,54 +1562,67 @@ export class BuildingManager {
 
     const targetPos = parkingSpot ? parkingSpot.position : building.frontWorldPos;
 
-    for (const lane of candidateLanes) {
-      let lanePath: PathResult | null = null;
-      if (westEntry) {
-        const pW = Pathfinding.findShortestPath(westEntry.id, lane.id, allLanes);
-        if (pW && pW.routeWaypoints && pW.routeWaypoints.length >= 2) {
-          lanePath = pW;
-        }
-      }
-      if (eastEntry) {
-        const pE = Pathfinding.findShortestPath(eastEntry.id, lane.id, allLanes);
-        if (pE && pE.routeWaypoints && pE.routeWaypoints.length >= 2) {
-          if (!lanePath || pE.totalDistance < lanePath.totalDistance) {
-            lanePath = pE;
-          }
-        }
-      }
+    // 搜尋自特定聯外公路進口 (西側或東側) 到達目標車道之最佳路徑
+    const findBestPathForEntry = (
+      entry: DirectedLane | null
+    ): { path: PathResult; isPreferred: boolean } | null => {
+      if (!entry) return null;
 
-      if (lanePath) {
-        const dist = lane.centerPoint.distanceTo(targetPos);
-        if (!bestPath || dist < bestDistToTarget) {
-          bestPath = lanePath;
-          bestDistToTarget = dist;
-        }
-      }
-    }
-
-    // 若首選車道無外聯路徑，退回嘗試該路塊之所有車道
-    if (!bestPath && candidateLanes !== roadTile.lanes) {
-      for (const lane of roadTile.lanes) {
-        let lanePath: PathResult | null = null;
-        if (westEntry) {
-          const pW = Pathfinding.findShortestPath(westEntry.id, lane.id, allLanes);
-          if (pW && pW.routeWaypoints && pW.routeWaypoints.length >= 2) lanePath = pW;
-        }
-        if (eastEntry) {
-          const pE = Pathfinding.findShortestPath(eastEntry.id, lane.id, allLanes);
-          if (pE && pE.routeWaypoints && pE.routeWaypoints.length >= 2) {
-            if (!lanePath || pE.totalDistance < lanePath.totalDistance) lanePath = pE;
-          }
-        }
-        if (lanePath) {
+      // 1. 優先嘗試候選車道 (順向停車側車道)
+      let bestPrefPath: PathResult | null = null;
+      let bestPrefDist = Infinity;
+      for (const lane of candidateLanes) {
+        const p = Pathfinding.findShortestPath(entry.id, lane.id, allLanes);
+        if (p && p.routeWaypoints && p.routeWaypoints.length >= 2) {
           const dist = lane.centerPoint.distanceTo(targetPos);
-          if (!bestPath || dist < bestDistToTarget) {
-            bestPath = lanePath;
-            bestDistToTarget = dist;
+          if (!bestPrefPath || dist < bestPrefDist) {
+            bestPrefPath = p;
+            bestPrefDist = dist;
           }
         }
       }
+      if (bestPrefPath) {
+        return { path: bestPrefPath, isPreferred: true };
+      }
+
+      // 2. 若首選車道無外聯路徑，退回嘗試該路塊之所有車道
+      if (candidateLanes !== roadTile.lanes) {
+        let bestFallbackPath: PathResult | null = null;
+        let bestFallbackDist = Infinity;
+        for (const lane of roadTile.lanes) {
+          const p = Pathfinding.findShortestPath(entry.id, lane.id, allLanes);
+          if (p && p.routeWaypoints && p.routeWaypoints.length >= 2) {
+            const dist = lane.centerPoint.distanceTo(targetPos);
+            if (!bestFallbackPath || dist < bestFallbackDist) {
+              bestFallbackPath = p;
+              bestFallbackDist = dist;
+            }
+          }
+        }
+        if (bestFallbackPath) {
+          return { path: bestFallbackPath, isPreferred: false };
+        }
+      }
+
+      return null;
+    };
+
+    const westResult = findBestPathForEntry(westEntry);
+    const eastResult = findBestPathForEntry(eastEntry);
+
+    // 依據西側與東側外聯可行性，實現雙向隨機進入 (各 50% 機率)
+    if (westResult && eastResult) {
+      if (westResult.isPreferred === eastResult.isPreferred) {
+        // 兩側優先級相同 (皆為首選車道或皆為退回車道)，以 50% 機率隨機選自西側或東側進入
+        bestPath = Math.random() < 0.5 ? westResult.path : eastResult.path;
+      } else {
+        // 若僅其中一側能停靠首選車道，以首選車道優先
+        bestPath = westResult.isPreferred ? westResult.path : eastResult.path;
+      }
+    } else if (westResult) {
+      bestPath = westResult.path;
+    } else if (eastResult) {
+      bestPath = eastResult.path;
     }
 
     if (!bestPath) {
@@ -1574,26 +1637,7 @@ export class BuildingManager {
 
     // 將停車位座標加入導航路徑最後，使車輛順暢靠邊駛入車位
     if (parkingSpot) {
-      const rwps = bestPath.routeWaypoints;
-      const lastWp = rwps[rwps.length - 1];
-
-      const approachPoint = lastWp.position.clone().lerp(parkingSpot.position, 0.5);
-      approachPoint.y = 0.04;
-      rwps.push({
-        position: approachPoint,
-        laneId: lastWp.laneId,
-        isIntersection: false,
-        isStopLine: false,
-      });
-
-      const spotTarget = parkingSpot.position.clone();
-      spotTarget.y = 0.04;
-      rwps.push({
-        position: spotTarget,
-        laneId: lastWp.laneId,
-        isIntersection: false,
-        isStopLine: false,
-      });
+      bestPath = this.attachCurbsideArrival(bestPath, parkingSpot);
     }
 
     building.moveInStatus = 'enRoute';
@@ -1654,13 +1698,13 @@ export class BuildingManager {
           else if (parkingSpot.side === 'north') sidewalkPos.z -= 0.18;
           else if (parkingSpot.side === 'south') sidewalkPos.z += 0.18;
         }
-        sidewalkPos.y = 0.018;
+        sidewalkPos.y = 0.07; // 立體高架人行道高度 0.07m
 
         const frontDoorPos = building.worldCenter.clone().lerp(building.frontWorldPos, 0.45);
-        frontDoorPos.y = 0.018;
+        frontDoorPos.y = 0.04;
 
         const houseGatePos = building.frontWorldPos.clone();
-        houseGatePos.y = 0.018;
+        houseGatePos.y = 0.07;
 
         // 5. 如果車內有多個人，應當依序下車而非同時 (設定交錯延遲時間)
         for (let i = 0; i < newResidents.length; i++) {
@@ -1875,11 +1919,32 @@ export class BuildingManager {
           const prefText = r.transitPreference === 'DriveOnly'
             ? '偏好開車'
             : (r.transitPreference === 'WalkIfClose' ? '短途步行' : '大眾運輸');
-          const actText = r.currentActivity === 'AtHome'
-            ? '<span style="color: #4ade80;">在家</span>'
-            : (r.currentTravelMode === 'drive'
-                ? '<span style="color: #fbbf24;">開車出行</span>'
-                : '<span style="color: #38bdf8;">步行出行</span>');
+          let actText = '<span style="color: #4ade80;">在家</span>';
+          if (r.currentActivity !== 'AtHome') {
+            if (r.currentTravelMode === 'drive') {
+              const activePed = this.activePedestrians.find((p) => p.profile.id === r.id);
+              if (activePed) {
+                if (activePed.isWaitingLight) {
+                  actText = '<span style="color: #ef4444; font-weight: bold;">🚦 停等紅綠燈 (走向車輛)</span>';
+                } else if (activePed.isCrossingCrosswalk) {
+                  actText = '<span style="color: #38bdf8; font-weight: bold;">🚸 穿越斑馬線 (走向車輛)</span>';
+                } else {
+                  actText = '<span style="color: #4ade80;">🚶 走向車輛中</span>';
+                }
+              } else {
+                actText = '<span style="color: #fbbf24;">開車出行</span>';
+              }
+            } else {
+              const activePed = this.activePedestrians.find((p) => p.profile.id === r.id);
+              if (activePed?.isWaitingLight) {
+                actText = '<span style="color: #ef4444; font-weight: bold;">🚶 停等紅綠燈</span>';
+              } else if (activePed?.isCrossingCrosswalk) {
+                actText = '<span style="color: #38bdf8; font-weight: bold;">🚸 穿越斑馬線</span>';
+              } else {
+                actText = '<span style="color: #38bdf8;">步行通勤</span>';
+              }
+            }
+          }
           return `
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
               <span style="color: #f1f5f9;">${icon} ${r.name} <span style="font-size: 10px; color: #64748b;">(${prefText})</span></span>
@@ -2369,28 +2434,251 @@ export class BuildingManager {
 
   /**
    * 搜尋兩路塊間之最佳連續車道行車路徑
+   * @param originTileKey 起點道路網格 Key
+   * @param destTileKey 終點道路網格 Key
+   * @param requiredStartDir 嚴格限制起步車道之行駛方向 (如路邊車位起步，只允許對應順向車道)
+   * @param preferredGoalDir 偏好抵達車道之行駛方向 (如工廠同側順向車道，供靠右行駛路邊停車)
    */
-  public findBestRoadPath(originTileKey: string, destTileKey: string): PathResult | null {
+  public findBestRoadPath(
+    originTileKey: string,
+    destTileKey: string,
+    requiredStartDir?: 'N' | 'S' | 'E' | 'W',
+    preferredGoalDir?: 'N' | 'S' | 'E' | 'W'
+  ): PathResult | null {
     const originTile = this.roadNetwork.getTile(originTileKey);
     const destTile = this.roadNetwork.getTile(destTileKey);
     if (!originTile || !destTile) return null;
 
     const allLanes = this.roadNetwork.getAllLanes();
+
+    // 篩選起步車道：不從交叉路口內彎道或 UTurn 道直接起步
+    let startLanes = originTile.lanes.filter((l) => !l.isIntersection && !l.isUTurn);
+    if (startLanes.length === 0) startLanes = originTile.lanes;
+
+    // 若指定起步方向（來自路邊車位朝向），嚴格限制起步車道方向
+    if (requiredStartDir) {
+      const matched = startLanes.filter((l) => l.direction === requiredStartDir);
+      if (matched.length > 0) {
+        startLanes = matched;
+      }
+    }
+
+    // 目標車道：優先考量目的地同側之順向車道
+    let goalLanes = destTile.lanes.filter((l) => !l.isIntersection && !l.isUTurn);
+    if (goalLanes.length === 0) goalLanes = destTile.lanes;
+
+    if (preferredGoalDir) {
+      // 將符合 preferredGoalDir 的目標車道排在前面
+      goalLanes.sort((a, b) => {
+        const aPref = a.direction === preferredGoalDir ? 1 : 0;
+        const bPref = b.direction === preferredGoalDir ? 1 : 0;
+        return bPref - aPref;
+      });
+    }
+
     let bestPath: PathResult | null = null;
     let shortestDist = Infinity;
 
-    for (const startLane of originTile.lanes) {
-      for (const goalLane of destTile.lanes) {
+    for (const startLane of startLanes) {
+      for (const goalLane of goalLanes) {
         const path = Pathfinding.findShortestPath(startLane.id, goalLane.id, allLanes);
         if (path && path.routeWaypoints && path.routeWaypoints.length >= 2) {
-          if (path.totalDistance < shortestDist) {
-            shortestDist = path.totalDistance;
+          // 若偏好抵達方向且此目標車道符合，給予虛擬權重優勢使車輛偏好開到建築同側
+          const isPreferredGoal = preferredGoalDir && goalLane.direction === preferredGoalDir;
+          const effectiveDist = isPreferredGoal ? path.totalDistance : path.totalDistance + 50.0;
+          if (effectiveDist < shortestDist) {
+            shortestDist = effectiveDist;
             bestPath = path;
           }
         }
       }
     }
+
+    // 備援：若嚴格限制 requiredStartDir 找不到任何路徑（極端斷路狀況），嘗試不限起步方向
+    if (!bestPath && requiredStartDir) {
+      return this.findBestRoadPath(originTileKey, destTileKey, undefined, preferredGoalDir);
+    }
+
     return bestPath;
+  }
+
+  /**
+   * 修正車輛自路邊停車位起步之旅程路徑：
+   * 1. 嚴格以車位座標 (carSpot.position) 作為第 0 個節點，杜絕車輛瞬移
+   * 2. 僅在起步車道內部剪除位於車位後方的節點，平滑匯入前方順向車道，絕不倒退
+   * 3. 離開起步車道後之所有沿途道路節點 100% 完整保留，杜絕截斷為直線飛越！
+   */
+  public attachCurbsideDeparture(drivePath: PathResult, carSpot: CurbsideSpot): PathResult {
+    if (!drivePath.routeWaypoints || drivePath.routeWaypoints.length < 2) return drivePath;
+
+    const dir = ParkingManager.getDirectionForSide(carSpot.side);
+    const dirVec = new THREE.Vector3();
+    if (dir === 'N') dirVec.set(0, 0, -1);
+    else if (dir === 'S') dirVec.set(0, 0, 1);
+    else if (dir === 'E') dirVec.set(1, 0, 0);
+    else if (dir === 'W') dirVec.set(-1, 0, 0);
+
+    const rwps = drivePath.routeWaypoints;
+    const startLaneId = rwps[0].laneId;
+
+    const newRwps: RouteWaypoint[] = [];
+
+    // 起點嚴格錨定於車位座標
+    const startRwp: RouteWaypoint = {
+      position: carSpot.position.clone(),
+      laneId: startLaneId,
+      isIntersection: false,
+      isStopLine: false,
+    };
+    startRwp.position.y = 0.04;
+    newRwps.push(startRwp);
+
+    let hasExitedStartLane = false;
+    for (let i = 0; i < rwps.length; i++) {
+      const wp = rwps[i];
+      if (!hasExitedStartLane && wp.laneId === startLaneId) {
+        const toWp = new THREE.Vector3().subVectors(wp.position, carSpot.position);
+        const forwardDist = toWp.dot(dirVec);
+        // 僅在起步車道內，剃除位於車身後方或緊鄰（<= 0.2m）之節點
+        if (forwardDist <= 0.2) {
+          continue;
+        }
+      } else {
+        hasExitedStartLane = true;
+      }
+      // 只要是起步車道前方之節點，或已進入後續車道/路口之節點，100% 完整保留！
+      newRwps.push(wp);
+    }
+
+    // 若起點車道節點全部在後方且沒有其他車道節點（極端情況），至少保留原本最後一個節點
+    if (newRwps.length === 1 && rwps.length > 0) {
+      newRwps.push(rwps[rwps.length - 1]);
+    }
+
+    const newWaypoints = newRwps.map((r) => r.position.clone());
+    let totalDist = 0;
+    for (let i = 1; i < newWaypoints.length; i++) {
+      totalDist += newWaypoints[i].distanceTo(newWaypoints[i - 1]);
+    }
+
+    return {
+      laneIds: drivePath.laneIds,
+      waypoints: newWaypoints,
+      routeWaypoints: newRwps,
+      totalDistance: totalDist,
+    };
+  }
+
+  /**
+   * 修正車輛抵達目的地路邊停車位之路徑（過渡性停車動線）：
+   * 1. 嚴格完整保留到達終點車道前之所有歷史道路航點（高速公路、沿途轉彎、十字路口等 100% 保留！）
+   * 2. 僅在終點車道內部剪除超過切入點的前方節點，防止衝過頭後倒退
+   * 3. 平滑插入四階泊車動線「車道切入點 -> 斜向進場點 -> 路緣對齊點 -> 最終停車位」，實現自然流暢的靠邊停車過渡畫面
+   */
+  public attachCurbsideArrival(drivePath: PathResult, parkSpot: CurbsideSpot): PathResult {
+    if (!drivePath.routeWaypoints || drivePath.routeWaypoints.length < 2) return drivePath;
+
+    const dir = ParkingManager.getDirectionForSide(parkSpot.side);
+    const dirVec = new THREE.Vector3();
+    if (dir === 'N') dirVec.set(0, 0, -1);
+    else if (dir === 'S') dirVec.set(0, 0, 1);
+    else if (dir === 'E') dirVec.set(1, 0, 0);
+    else if (dir === 'W') dirVec.set(-1, 0, 0);
+
+    // 靠右行駛：由行進方向旋轉 90 度得到指向右側路緣之向量 (-dirVec.z, 0, dirVec.x)
+    const latVec = new THREE.Vector3(-dirVec.z, 0, dirVec.x);
+
+    // 車道中心與路緣車位中心之橫向距 0.295m (0.62 - 0.325)
+    const LATERAL_OFFSET = 0.295;
+    const TURN_IN_LEAD = 0.65; // 在車位前方 0.65m 處由車道開始向右轉向
+
+    // 車位正對之車道中心點
+    const laneAtSpot = parkSpot.position.clone().sub(latVec.clone().multiplyScalar(LATERAL_OFFSET));
+    laneAtSpot.y = 0.04;
+
+    // 1. 車道切入點 (仍在車道中心線上順行)
+    const turnInPoint = laneAtSpot.clone().sub(dirVec.clone().multiplyScalar(TURN_IN_LEAD));
+    turnInPoint.y = 0.04;
+
+    // 2. 斜向進場過渡點 (車身微斜切入路緣，前進約 0.35m，向右偏移 55%)
+    const midPoint = laneAtSpot.clone()
+      .sub(dirVec.clone().multiplyScalar(TURN_IN_LEAD * 0.45))
+      .add(latVec.clone().multiplyScalar(LATERAL_OFFSET * 0.55));
+    midPoint.y = 0.04;
+
+    // 3. 路緣對齊點 (車身已到達路緣側邊，距離車位 0.12m，車頭回正與路緣完全平行)
+    const alignPoint = parkSpot.position.clone().sub(dirVec.clone().multiplyScalar(0.12));
+    alignPoint.y = 0.04;
+
+    // 4. 最終停車位精確位置
+    const spotTarget = parkSpot.position.clone();
+    spotTarget.y = 0.04;
+
+    const rwps = drivePath.routeWaypoints;
+    const destLaneId = rwps[rwps.length - 1].laneId;
+    const firstDestLaneIdx = rwps.findIndex((w) => w.laneId === destLaneId);
+
+    const newRwps: RouteWaypoint[] = [];
+
+    // ★ 關鍵保護：嚴格保留到達終點車道前之所有歷史路徑航點 (包括高速公路、沿途街區與路口，絕不跨街剪除！)
+    const prefixEnd = firstDestLaneIdx !== -1 ? firstDestLaneIdx : rwps.length - 1;
+    for (let i = 0; i < prefixEnd; i++) {
+      newRwps.push(rwps[i]);
+    }
+
+    // 僅在終點車道內部，過濾超過切入點的前方節點
+    if (firstDestLaneIdx !== -1) {
+      for (let i = firstDestLaneIdx; i < rwps.length; i++) {
+        const wp = rwps[i];
+        const toTurnIn = new THREE.Vector3().subVectors(wp.position, turnInPoint);
+        const forwardDist = toTurnIn.dot(dirVec);
+
+        // 若該節點已超過或接近 turnInPoint，則停止保留
+        if (forwardDist >= -0.15) {
+          break;
+        }
+        newRwps.push(wp);
+      }
+    }
+
+    // 依序加入泊車四階動線「車道切入點 -> 斜向進場點 -> 路緣對齊點 -> 停車位」
+    newRwps.push({
+      position: turnInPoint,
+      laneId: destLaneId,
+      isIntersection: false,
+      isStopLine: false,
+    });
+    newRwps.push({
+      position: midPoint,
+      laneId: destLaneId,
+      isIntersection: false,
+      isStopLine: false,
+    });
+    newRwps.push({
+      position: alignPoint,
+      laneId: destLaneId,
+      isIntersection: false,
+      isStopLine: false,
+    });
+    newRwps.push({
+      position: spotTarget,
+      laneId: destLaneId,
+      isIntersection: false,
+      isStopLine: false,
+    });
+
+    const newWaypoints = newRwps.map((r) => r.position.clone());
+    let totalDist = 0;
+    for (let i = 1; i < newWaypoints.length; i++) {
+      totalDist += newWaypoints[i].distanceTo(newWaypoints[i - 1]);
+    }
+
+    return {
+      laneIds: drivePath.laneIds,
+      waypoints: newWaypoints,
+      routeWaypoints: newRwps,
+      totalDistance: totalDist,
+    };
   }
 
   /**
@@ -2411,6 +2699,21 @@ export class BuildingManager {
       routeWaypoints: rwps,
       totalDistance: p1.distanceTo(p2),
     };
+  }
+
+  /**
+   * 邊界斷路或特殊無解情況之行人直達備援路徑
+   */
+  private createDirectPedestrianFallback(home: PlacedBuilding, factory: PlacedBuilding): THREE.Vector3[] {
+    const homeDoor = home.worldCenter.clone().lerp(home.frontWorldPos, 0.45);
+    homeDoor.y = 0.04;
+    const homeGate = home.frontWorldPos.clone();
+    homeGate.y = 0.07;
+    const factoryGate = factory.frontWorldPos.clone();
+    factoryGate.y = 0.07;
+    const factoryDoor = factory.worldCenter.clone().lerp(factory.frontWorldPos, 0.45);
+    factoryDoor.y = 0.04;
+    return [homeDoor, homeGate, factoryGate, factoryDoor];
   }
 
   private onCommuteStateChanged?: () => void;
@@ -2509,20 +2812,24 @@ export class BuildingManager {
     if (mode === 'walk') {
       citizen.currentVehicleId = undefined;
 
-      // 建立沿路步行路徑至工廠
-      const roadPath = this.findBestRoadPath(homeBuilding.targetRoadTileKey, targetFactory.targetRoadTileKey);
-      const waypoints: THREE.Vector3[] = [homeBuilding.frontWorldPos.clone()];
-      if (roadPath && roadPath.waypoints.length > 0) {
-        for (const pt of roadPath.waypoints) {
-          const p = pt.clone();
-          p.y = 0.018;
-          waypoints.push(p);
-        }
+      // 透過行人路徑規劃系統 (PedestrianNetwork) 規劃門對門高架立體人行道路徑
+      const pedResult = this.pedestrianNetwork.findPathBetweenBuildings(
+        homeBuilding,
+        targetFactory
+      );
+
+      let waypoints: THREE.Vector3[];
+      let routeDesc = '';
+      if (pedResult && pedResult.waypoints.length >= 2) {
+        waypoints = pedResult.waypoints;
+        routeDesc = pedResult.description;
+      } else {
+        // 備援方案：若無連通人行道，使用安全人行直達備援動線
+        waypoints = this.createDirectPedestrianFallback(homeBuilding, targetFactory);
+        routeDesc = '無連通人行道，採人行直達備援動線前往';
       }
-      waypoints.push(targetFactory.frontWorldPos.clone());
-      const factoryDoor = targetFactory.worldCenter.clone().lerp(targetFactory.frontWorldPos, 0.45);
-      factoryDoor.y = 0.018;
-      waypoints.push(factoryDoor);
+
+      reason += ` 【人行動線】${routeDesc}。`;
 
       const pedMesh = CitizenModelFactory.createCitizen({
         gender: citizen.gender,
@@ -2539,7 +2846,8 @@ export class BuildingManager {
         spawnDelay: 0,
         currentWaypointIndex: 1,
         waypoints,
-        speed: 1.5,
+        routeWaypoints: pedResult?.routeWaypoints,
+        speed: 1.4, // 標準人行步速約 1.4 m/s (5.0 km/h)
         walkTimer: 0,
         isAlighted: true,
         hasEnteredHouse: false,
@@ -2559,15 +2867,55 @@ export class BuildingManager {
       citizen.currentVehicleId = chosenVehicle!.id;
 
       // 取得車輛目前停放位置
-      const carSpotPos = chosenVehicle!.parkedSpot
-        ? chosenVehicle!.parkedSpot.position.clone()
-        : homeBuilding.frontWorldPos.clone();
-      carSpotPos.y = 0.018;
+      let carSpot = chosenVehicle!.parkedSpot;
+      if (!carSpot && chosenVehicle!.parkedCarId && this.parkingManager) {
+        const parkedCar = this.parkingManager.getParkedCar(chosenVehicle!.parkedCarId);
+        if (parkedCar) {
+          carSpot = {
+            position: parkedCar.position.clone(),
+            rotationY: parkedCar.rotationY,
+            side: parkedCar.side,
+            tileKey: parkedCar.tileKey,
+          };
+          chosenVehicle!.parkedSpot = carSpot;
+        }
+      }
 
-      const walkToCarWaypoints = [
-        homeBuilding.frontWorldPos.clone(),
-        carSpotPos.clone(),
-      ];
+      const carSpotPos = carSpot
+        ? carSpot.position.clone()
+        : homeBuilding.frontWorldPos.clone();
+      carSpotPos.y = 0.02;
+
+      // 使用行人專屬尋路系統規劃自住家出發前往車輛旁之動線（支援近距直達與遠距多路口跨斑馬線尋路）
+      const pedToCarResult = this.pedestrianNetwork.findPathToCar(
+        homeBuilding,
+        carSpotPos,
+        carSpot
+      );
+
+      let walkToCarWaypoints: THREE.Vector3[];
+      let routeWaypoints: PedestrianWaypoint[] | undefined = undefined;
+      let walkDesc = '';
+
+      if (pedToCarResult && pedToCarResult.waypoints.length >= 2) {
+        walkToCarWaypoints = pedToCarResult.waypoints;
+        routeWaypoints = pedToCarResult.routeWaypoints;
+        walkDesc = pedToCarResult.description;
+      } else {
+        // 備援方案：若無連通人行道，採用直達備援動線走向車輛
+        const homeDoor = homeBuilding.worldCenter.clone().lerp(homeBuilding.frontWorldPos, 0.45);
+        homeDoor.y = 0.04;
+        const homeGate = homeBuilding.frontWorldPos.clone();
+        homeGate.y = 0.07;
+        walkToCarWaypoints = [
+          homeDoor,
+          homeGate,
+          carSpotPos.clone(),
+        ];
+        walkDesc = '人行道未連通，採直達備援動線走向車輛';
+      }
+
+      reason += ` 【走向車輛】${walkDesc}。`;
 
       const pedMesh = CitizenModelFactory.createCitizen({
         gender: citizen.gender,
@@ -2584,22 +2932,81 @@ export class BuildingManager {
         spawnDelay: 0,
         currentWaypointIndex: 1,
         waypoints: walkToCarWaypoints,
+        routeWaypoints,
         speed: 1.35,
         walkTimer: 0,
         isAlighted: true,
         hasEnteredHouse: false,
         onArrivedDestination: () => {
           // 市民上車！解鎖路邊停車位
+          const startTileKey = carSpot?.tileKey || homeBuilding.targetRoadTileKey;
           if (chosenVehicle!.parkedCarId && this.parkingManager) {
             this.parkingManager.removeParkedCar(chosenVehicle!.parkedCarId);
             chosenVehicle!.parkedCarId = undefined;
             chosenVehicle!.parkedSpot = undefined;
           }
 
-          // 尋找行車路徑
-          let drivePath = this.findBestRoadPath(homeBuilding.targetRoadTileKey, targetFactory.targetRoadTileKey);
+          // 尋找行車路徑：
+          // 1. 嚴格限制起步車道：依車位所在路緣方向順向行駛 (西側->S, 東側->N, 北側->W, 南側->E)，絕不逆向或跨越雙黃線瞬移！
+          // 2. 偏好抵達目標工廠同側車道，以便靠右行駛時直接停入工廠門前路緣車位
+          const requiredStartDir = carSpot ? ParkingManager.getDirectionForSide(carSpot.side) : undefined;
+          const targetRoadTile = this.roadNetwork.getTile(targetFactory.targetRoadTileKey);
+          const preferredGoalDir = targetRoadTile
+            ? ParkingManager.getPreferredArrivalDirection(targetRoadTile, targetFactory.frontWorldPos)
+            : undefined;
+
+          let drivePath = this.findBestRoadPath(
+            startTileKey,
+            targetFactory.targetRoadTileKey,
+            requiredStartDir,
+            preferredGoalDir
+          );
+          if (!drivePath && startTileKey !== homeBuilding.targetRoadTileKey) {
+            drivePath = this.findBestRoadPath(
+              homeBuilding.targetRoadTileKey,
+              targetFactory.targetRoadTileKey,
+              requiredStartDir,
+              preferredGoalDir
+            );
+          }
+          let destParkSpot: CurbsideSpot | null = null;
           if (!drivePath) {
-            drivePath = this.createDirectFallbackPath(homeBuilding.frontWorldPos, targetFactory.frontWorldPos);
+            drivePath = this.createDirectFallbackPath(carSpotPos, targetFactory.frontWorldPos);
+          } else {
+            if (carSpot) {
+              // 平滑接合路邊車位起步點，車輛直接自車位順向切出匯入車道，絕不倒退瞬移
+              drivePath = this.attachCurbsideDeparture(drivePath, carSpot);
+            }
+
+            // 靠右行駛規則：抵達目的地時就近尋找車位，只能判定行駛車道右側之合法車位
+            let finalDir: 'N' | 'S' | 'E' | 'W' = 'S';
+            const rwps = drivePath.routeWaypoints;
+            if (rwps && rwps.length >= 2) {
+              const pEnd = rwps[rwps.length - 1].position;
+              const pPrev = rwps[rwps.length - 2].position;
+              const dX = pEnd.x - pPrev.x;
+              const dZ = pEnd.z - pPrev.z;
+              if (Math.abs(dX) > Math.abs(dZ)) {
+                finalDir = dX > 0 ? 'E' : 'W';
+              } else {
+                finalDir = dZ > 0 ? 'S' : 'N';
+              }
+            }
+
+            const allowedParkingSide = ParkingManager.getRightSideForDirection(finalDir);
+            destParkSpot = this.parkingManager
+              ? this.parkingManager.findClosestAvailableSpot(
+                  targetFactory.frontWorldPos,
+                  targetFactory.targetRoadTileKey,
+                  allowedParkingSide
+                )
+              : null;
+
+            // 平滑接合目的地路邊停車進場過渡動線：車道切入 -> 斜向進場 -> 對齊路緣 -> 停入車位
+            if (destParkSpot && this.parkingManager) {
+              this.parkingManager.reserveSpot(destParkSpot);
+              drivePath = this.attachCurbsideArrival(drivePath, destParkSpot);
+            }
           }
 
           // 生成行駛中的市民車輛
@@ -2607,43 +3014,48 @@ export class BuildingManager {
             drivePath,
             chosenVehicle!.color,
             (arrivedVeh) => {
-              // 開到廠處後，開始就近尋找停車位，找到後停車、下車並步行進入工廠
-              const parkSpot = this.parkingManager?.findClosestAvailableSpot(
-                targetFactory.frontWorldPos,
-                targetFactory.targetRoadTileKey
-              );
-
               let dropOffPos: THREE.Vector3;
-              if (parkSpot && this.parkingManager) {
+              if (destParkSpot && this.parkingManager) {
                 const parkedCar = this.parkingManager.parkExistingCarMesh(
                   arrivedVeh.mesh,
-                  parkSpot,
+                  destParkSpot,
                   chosenVehicle!.color,
                   targetFactory.id,
                   chosenVehicle!.id
                 );
                 chosenVehicle!.parkedCarId = parkedCar.id;
-                chosenVehicle!.parkedSpot = parkSpot;
-                dropOffPos = parkSpot.position.clone();
-                if (parkSpot.side === 'west') dropOffPos.x -= 0.18;
-                else if (parkSpot.side === 'east') dropOffPos.x += 0.18;
-                else if (parkSpot.side === 'north') dropOffPos.z -= 0.18;
-                else if (parkSpot.side === 'south') dropOffPos.z += 0.18;
+                chosenVehicle!.parkedSpot = destParkSpot;
+                dropOffPos = destParkSpot.position.clone();
               } else {
-                arrivedVeh.mesh.position.copy(targetFactory.frontWorldPos);
-                dropOffPos = targetFactory.frontWorldPos.clone();
+                // 若無該側合法路邊車位，停留在車輛抵達處之右側路緣，嚴禁跨越雙黃線逆向瞬移
+                dropOffPos = arrivedVeh.mesh.position.clone();
               }
-              dropOffPos.y = 0.018;
 
-              // 市民下車，步行進入工廠
-              const factoryDoor = targetFactory.worldCenter.clone().lerp(targetFactory.frontWorldPos, 0.45);
-              factoryDoor.y = 0.018;
+              // 市民下車，透過行人尋路系統規劃從下車處步行進入工廠之動線
+              const pedToFactoryResult = this.pedestrianNetwork.findPathFromCarToBuilding(
+                dropOffPos,
+                targetFactory,
+                destParkSpot ?? undefined
+              );
 
-              const walkToFactoryWaypoints = [
-                dropOffPos.clone(),
-                targetFactory.frontWorldPos.clone(),
-                factoryDoor.clone(),
-              ];
+              let walkToFactoryWaypoints: THREE.Vector3[];
+              let factoryRouteWps: PedestrianWaypoint[] | undefined = undefined;
+
+              if (pedToFactoryResult && pedToFactoryResult.waypoints.length >= 2) {
+                walkToFactoryWaypoints = pedToFactoryResult.waypoints;
+                factoryRouteWps = pedToFactoryResult.routeWaypoints;
+              } else {
+                const factoryDoor = targetFactory.worldCenter.clone().lerp(targetFactory.frontWorldPos, 0.45);
+                factoryDoor.y = 0.04;
+                const factoryFrontPos = targetFactory.frontWorldPos.clone();
+                factoryFrontPos.y = 0.07;
+
+                walkToFactoryWaypoints = [
+                  dropOffPos.clone(),
+                  factoryFrontPos,
+                  factoryDoor.clone(),
+                ];
+              }
 
               const alightedPedMesh = CitizenModelFactory.createCitizen({
                 gender: citizen.gender,
@@ -2660,6 +3072,7 @@ export class BuildingManager {
                 spawnDelay: 0.15,
                 currentWaypointIndex: 1,
                 waypoints: walkToFactoryWaypoints,
+                routeWaypoints: factoryRouteWps,
                 speed: 1.25,
                 walkTimer: 0,
                 isAlighted: true,
@@ -2769,5 +3182,60 @@ export class BuildingManager {
     this.updateTooltipContent();
     if (this.onCommuteStateChanged) this.onCommuteStateChanged();
     return count;
+  }
+
+  /**
+   * 查詢指定路口指定路口臂之斑馬線人行道，是否有行人正在穿越中
+   * 轉彎車輛於進入路口前必須依此判定，若有行人正在穿越，必須在路口停止線前停等禮讓，嚴禁進入路口
+   * @param intersectionKey 路口唯一鍵值 (例: "0,0")
+   * @param arm 欲轉入之路口臂 ('N' | 'S' | 'E' | 'W')
+   */
+  public isPedestrianCrossingCrosswalk(intersectionKey: string, arm: 'N' | 'S' | 'E' | 'W'): boolean {
+    for (const ped of this.activePedestrians) {
+      if (!ped.isAlighted || ped.hasEnteredHouse || !ped.mesh) continue;
+
+      // 行人明確處於正在穿越該路口指定臂之斑馬線狀態中
+      if (ped.isCrossingCrosswalk && ped.crossingIntersectionKey === intersectionKey && ped.crossingArm === arm) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 輔助車輛近距離防撞避讓：偵測車輛前方扇形範圍內是否有正在穿越斑馬線之行人
+   */
+  public findPedestrianAhead(
+    vehiclePos: THREE.Vector3,
+    headingY: number,
+    maxDist: number = 2.2
+  ): { pedestrian: MovingInPedestrian; distance: number } | null {
+    const dirX = Math.sin(headingY);
+    const dirZ = Math.cos(headingY);
+
+    let closestDist = Infinity;
+    let closestPed: MovingInPedestrian | null = null;
+
+    for (const ped of this.activePedestrians) {
+      if (!ped.isAlighted || ped.hasEnteredHouse || !ped.mesh || !ped.isCrossingCrosswalk) continue;
+
+      const dx = ped.mesh.position.x - vehiclePos.x;
+      const dz = ped.mesh.position.z - vehiclePos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist <= maxDist && dist < closestDist) {
+        // 前方扇形檢測（夾角內積 > 0.45，約前方 63 度錐體）
+        const dot = (dx * dirX + dz * dirZ) / (dist || 1);
+        if (dot > 0.45) {
+          closestDist = dist;
+          closestPed = ped;
+        }
+      }
+    }
+
+    if (closestPed) {
+      return { pedestrian: closestPed, distance: closestDist };
+    }
+    return null;
   }
 }

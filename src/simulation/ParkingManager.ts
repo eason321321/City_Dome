@@ -50,6 +50,50 @@ export class ParkingManager {
   }
 
   /**
+   * 靠右行駛規則：取得指定行車方向之右側路緣方位
+   * N (北向, -Z) -> 右側為東 (east, +X)
+   * S (南向, +Z) -> 右側為西 (west, -X)
+   * E (東向, +X) -> 右側為南 (south, +Z)
+   * W (西向, -X) -> 右側為北 (north, -Z)
+   */
+  public static getRightSideForDirection(dir: 'N' | 'S' | 'E' | 'W'): 'west' | 'east' | 'north' | 'south' {
+    switch (dir) {
+      case 'N': return 'east';
+      case 'S': return 'west';
+      case 'E': return 'south';
+      case 'W': return 'north';
+    }
+  }
+
+  /**
+   * 靠右行駛規則：取得指定路緣所對應之順向行車/起步方向
+   * west (西側路緣)  -> 車頭朝南 (S, +Z)
+   * east (東側路緣)  -> 車頭朝北 (N, -Z)
+   * north (北側路緣) -> 車頭朝西 (W, -X)
+   * south (南側路緣) -> 車頭朝東 (E, +X)
+   */
+  public static getDirectionForSide(side: 'west' | 'east' | 'north' | 'south'): 'N' | 'S' | 'E' | 'W' {
+    switch (side) {
+      case 'west': return 'S';
+      case 'east': return 'N';
+      case 'north': return 'W';
+      case 'south': return 'E';
+    }
+  }
+
+  /**
+   * 依目標建築正面相對於道路之方位，推算車輛若要停靠在該建築同側路緣時之偏好抵達行車方向
+   */
+  public static getPreferredArrivalDirection(roadTile: RoadTile, buildingFrontPos: THREE.Vector3): 'N' | 'S' | 'E' | 'W' {
+    const isNorthSouth = roadTile.rotationY === 0;
+    if (isNorthSouth) {
+      return buildingFrontPos.x < roadTile.gx ? 'S' : 'N';
+    } else {
+      return buildingFrontPos.z < roadTile.gz ? 'W' : 'E';
+    }
+  }
+
+  /**
    * 規則審查：嚴格檢查指定道路網格是否允許路邊停車
    * 規則清楚明確，避免遮蔽路口號誌視野與轉彎盲區
    */
@@ -180,8 +224,13 @@ export class ParkingManager {
    * 尋找離目標房屋門前最近之可用合法路邊停車位
    * @param homePos 房屋正面座標
    * @param preferredTileKey 首選路塊 Key (若有)
+   * @param allowedSide 嚴格限制停靠之道路側 (用於抵達目的地時靠右行駛判定，只允許車道右側路緣)
    */
-  public findClosestAvailableSpot(homePos: THREE.Vector3, preferredTileKey?: string): CurbsideSpot | null {
+  public findClosestAvailableSpot(
+    homePos: THREE.Vector3,
+    preferredTileKey?: string,
+    allowedSide?: 'west' | 'east' | 'north' | 'south'
+  ): CurbsideSpot | null {
     const allTiles = this.roadNetwork.getAllTiles();
     const candidateTiles: RoadTile[] = [];
 
@@ -217,10 +266,15 @@ export class ParkingManager {
       const testOffsets = [-0.45, 0.45];
 
       if (isNorthSouth) {
-        const sides: Array<{ side: 'west' | 'east'; x: number; rotY: number }> = [
+        let sides: Array<{ side: 'west' | 'east'; x: number; rotY: number }> = [
           { side: 'west', x: tile.gx - this.CURB_PARKING_OFFSET, rotY: Math.PI },
           { side: 'east', x: tile.gx + this.CURB_PARKING_OFFSET, rotY: 0 },
         ];
+        if (allowedSide) {
+          sides = sides.filter((s) => s.side === allowedSide);
+        }
+        if (sides.length === 0) continue;
+
         // 優先測試靠近房屋該側
         sides.sort((s1, s2) => Math.abs(s1.x - homePos.x) - Math.abs(s2.x - homePos.x));
 
@@ -245,10 +299,15 @@ export class ParkingManager {
           }
         }
       } else {
-        const sides: Array<{ side: 'north' | 'south'; z: number; rotY: number }> = [
+        let sides: Array<{ side: 'north' | 'south'; z: number; rotY: number }> = [
           { side: 'north', z: tile.gz - this.CURB_PARKING_OFFSET, rotY: -Math.PI / 2 },
           { side: 'south', z: tile.gz + this.CURB_PARKING_OFFSET, rotY: Math.PI / 2 },
         ];
+        if (allowedSide) {
+          sides = sides.filter((s) => s.side === allowedSide);
+        }
+        if (sides.length === 0) continue;
+
         sides.sort((s1, s2) => Math.abs(s1.z - homePos.z) - Math.abs(s2.z - homePos.z));
 
         for (const s of sides) {
@@ -351,6 +410,13 @@ export class ParkingManager {
     };
     this.parkedCars.set(parkedCar.id, parkedCar);
     return parkedCar;
+  }
+
+  /**
+   * 根據 ID 取得停放車輛
+   */
+  public getParkedCar(id: string): ParkedCar | undefined {
+    return this.parkedCars.get(id);
   }
 
   /**

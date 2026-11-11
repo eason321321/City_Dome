@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoadTextureFactory } from '../rendering/RoadTextureFactory';
 import { TrafficLightRenderer, TrafficSignalState } from '../rendering/TrafficLightRenderer';
 import { RoadMarkingFactory } from '../rendering/RoadMarkingFactory';
+import { PedestrianNetwork } from './PedestrianNetwork';
 
 export type RoadTileType = 'Straight' | 'Corner' | 'ThreeWay' | 'FourWay' | 'DeadEnd';
 
@@ -61,6 +62,7 @@ export class RoadNetwork {
   private tiles: Map<string, RoadTile> = new Map();
   private intersections: Map<string, IntersectionData> = new Map();
   private allLanes: Map<string, DirectedLane> = new Map();
+  private pedestrianNetwork: PedestrianNetwork = new PedestrianNetwork();
 
   // 共享道路幾何體 (2m x 0.05m x 2m)
   private roadGeometry: THREE.BoxGeometry = new THREE.BoxGeometry(2, 0.05, 2);
@@ -72,6 +74,11 @@ export class RoadNetwork {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.scene.add(this.pedestrianNetwork.getDebugGroup());
+  }
+
+  public getPedestrianNetwork(): PedestrianNetwork {
+    return this.pedestrianNetwork;
   }
 
   public getTile(key: string): RoadTile | undefined {
@@ -169,10 +176,15 @@ export class RoadNetwork {
   }
 
   /**
-   * 取得外部公路進城車道 (西側或東側進口均可作為進城起點)
+   * 取得外部公路進城車道 (西側或東側雙向隨機進入)
    */
   public getExternalSpawnLane(): DirectedLane | null {
-    return this.getHighwayWestEntryLane() || this.getHighwayEastEntryLane();
+    const west = this.getHighwayWestEntryLane();
+    const east = this.getHighwayEastEntryLane();
+    if (west && east) {
+      return Math.random() < 0.5 ? west : east;
+    }
+    return west || east || null;
   }
 
   /**
@@ -1045,6 +1057,9 @@ export class RoadNetwork {
         }
       }
     }
+
+    // 3. 重建全網立體人行道與斑馬線行人路網 (PedestrianNetwork)
+    this.pedestrianNetwork.rebuild(this.tiles);
   }
 
   private sampleBezier(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, steps = 6): THREE.Vector3[] {

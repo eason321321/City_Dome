@@ -158,6 +158,7 @@ if (container) {
     roadManager.getRoadNetwork(),
     vehicleManager
   );
+  vehicleManager.setBuildingManager(buildingManager);
   buildingManager.setParkingManager(parkingManager);
   devMenu.setBuildingManager(buildingManager);
   devMenu.setTimeManager(timeManager);
@@ -261,6 +262,7 @@ if (container) {
   }
 
   // 暴露全域除錯物件供開發者與測試工具使用
+  (window as any).THREE = THREE;
   (window as any).__cityDome = {
     roadManager,
     zoningManager,
@@ -270,6 +272,7 @@ if (container) {
     devMenu,
     buildMenu,
     Pathfinding,
+    pedestrianNetwork: roadManager.getRoadNetwork().getPedestrianNetwork(),
   };
 
   console.log('✅ 底部狀態欄 UI 與時間推進系統已就緒！初始狀態：', initialWorldState);

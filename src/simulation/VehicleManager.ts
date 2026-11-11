@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { VehicleModelFactory } from '../rendering/VehicleModelFactory';
 import { RoadNetwork, DirectedLane } from '../systems/RoadNetwork';
 import { Pathfinding, PathResult } from '../systems/Pathfinding';
+import type { BuildingManager } from '../systems/BuildingManager';
 
 export interface ActiveVehicle {
   id: string;
@@ -21,6 +22,7 @@ export interface ActiveVehicle {
   currentLaneId?: string;    // 當前行駛所在之車道 ID (供車道隊列管理)
   distToLaneExit?: number;   // 距離當前車道出口之剩餘累積距離 (m)
   isHoldingForBoxClearance?: boolean; // 是否正因路口淨空防死鎖機制在停止線停等
+  isYieldingToPedestrian?: boolean;   // 是否正因轉彎禮讓穿越斑馬線之行人而在停止線前停等
 }
 
 export interface LaneVehicleEntry {
@@ -39,6 +41,7 @@ export interface LaneVehicleEntry {
 export class VehicleManager {
   private scene: THREE.Scene;
   private roadNetwork: RoadNetwork;
+  private buildingManager: BuildingManager | null = null;
   private vehicles: ActiveVehicle[] = [];
   private nextVehicleId: number = 1;
 
@@ -67,6 +70,10 @@ export class VehicleManager {
   constructor(scene: THREE.Scene, roadNetwork: RoadNetwork) {
     this.scene = scene;
     this.roadNetwork = roadNetwork;
+  }
+
+  public setBuildingManager(buildingManager: BuildingManager): void {
+    this.buildingManager = buildingManager;
   }
 
   /**
@@ -444,14 +451,51 @@ export class VehicleManager {
         }
       }
 
-      // 4.2 檢測路口淨空狀態（"Don't Block the Box" / 黃網線防死鎖機制）
-      // 當自車尚未進入路口且前方有路口停止線時，若下游出境路段被車輛回堵或空間不足，嚴禁駛入路口
+      // 4.2 檢測路口淨空狀態（"Don't Block the Box" / 黃網線防死鎖機制）與轉彎禮讓行人優先機制
+      // 當自車尚未進入路口且前方有路口停止線時：
+      // 1. 轉彎車（右轉、左轉、迴轉）若要轉入之路口斑馬線有行人正在穿越，行人絕對優先，轉彎車嚴禁駛入路口，必須在停止線前停等
+      // 2. 若下游出境路段被車輛回堵或空間不足，嚴禁駛入路口避免堵死路口
       let isBoxBlocked = false;
+      let isYieldingToPedestrian = false;
       const isApproachingIntersection = nextStopLineIndex !== -1 &&
         (!rwps[v.currentWaypointIndex].isIntersection || rwps[v.currentWaypointIndex].intersectionKey !== rwps[nextStopLineIndex].intersectionKey);
 
       if (isApproachingIntersection && distToStopLine <= VehicleManager.LOOKAHEAD_DISTANCE) {
-        // 尋找該路口出境點 (走出路口範圍的第一個航點)
+        const stopWp = rwps[nextStopLineIndex];
+
+        // 4.2.1 轉彎禮讓行人機制：檢測轉入路口臂之斑馬線是否有行人穿越中
+        if (this.buildingManager && stopWp.intersectionKey) {
+          let toDir: ('N' | 'S' | 'E' | 'W') | null = null;
+          let fromDir: ('N' | 'S' | 'E' | 'W') | null = null;
+
+          for (let k = nextStopLineIndex; k < rwps.length && k <= nextStopLineIndex + 8; k++) {
+            const match = rwps[k].laneId?.match(/_([NSEW])_to_([NSEW])/);
+            if (match) {
+              fromDir = match[1] as 'N' | 'S' | 'E' | 'W';
+              toDir = match[2] as 'N' | 'S' | 'E' | 'W';
+              break;
+            }
+          }
+
+          if (toDir) {
+            const isStraight =
+              (fromDir === 'N' && toDir === 'S') ||
+              (fromDir === 'S' && toDir === 'N') ||
+              (fromDir === 'E' && toDir === 'W') ||
+              (fromDir === 'W' && toDir === 'E');
+
+            // 轉彎車（含迴轉）轉向目標路口臂：若目標斑馬線有行人穿越，禁止進入路口
+            const isTurning = !isStraight;
+            if (isTurning) {
+              const hasCrossingPed = this.buildingManager.isPedestrianCrossingCrosswalk(stopWp.intersectionKey, toDir);
+              if (hasCrossingPed) {
+                isYieldingToPedestrian = true;
+              }
+            }
+          }
+        }
+
+        // 4.2.2 尋找該路口出境點 (走出路口範圍的第一個航點)
         let intersectionExitWpIndex = nextStopLineIndex;
         for (let k = nextStopLineIndex; k < rwps.length; k++) {
           if (rwps[k].isIntersection) {
@@ -497,13 +541,14 @@ export class VehicleManager {
         }
       }
 
-      v.isHoldingForBoxClearance = isBoxBlocked && !isRedOrYellow;
+      v.isHoldingForBoxClearance = isBoxBlocked && !isRedOrYellow && !isYieldingToPedestrian;
+      v.isYieldingToPedestrian = isYieldingToPedestrian;
 
-      // 4.3 計算紅綠燈號誌與路口淨空之安全速限與最大允許位移
+      // 4.3 計算紅綠燈號誌、路口淨空與禮讓行人優先之安全速限與最大允許位移
       let targetSpeedForSignal = v.targetSpeed;
       let maxSignalMove = Infinity;
 
-      const mustHoldAtStopLine = (isRedOrYellow || isBoxBlocked) && nextStopLineIndex !== -1 && isApproachingIntersection;
+      const mustHoldAtStopLine = (isRedOrYellow || isBoxBlocked || isYieldingToPedestrian) && nextStopLineIndex !== -1 && isApproachingIntersection;
 
       if (mustHoldAtStopLine) {
         const remainingDistToStopLine = Math.max(0, distToStopLine - VehicleManager.STOP_LINE_BUFFER);
@@ -541,6 +586,16 @@ export class VehicleManager {
             Math.max(0, leadCar.speed * leadCar.speed + 2 * v.deceleration * netGap)
           );
           targetSpeedForLead = Math.min(v.targetSpeed, safeSpeed);
+        }
+      }
+
+      // 4.3.1 行駛中即時行人近距離防撞禮讓（如車輛已在路口內或直行遇突發狀況）
+      if (this.buildingManager && !mustHoldAtStopLine) {
+        const pedAhead = this.buildingManager.findPedestrianAhead(v.currentPosition, v.mesh.rotation.y, 2.2);
+        if (pedAhead) {
+          v.isYieldingToPedestrian = true;
+          targetSpeedForLead = 0;
+          maxLeadMove = Math.min(maxLeadMove, Math.max(0, pedAhead.distance - 0.7));
         }
       }
 
@@ -597,8 +652,24 @@ export class VehicleManager {
         }
       }
 
-      // 4.5 融合號誌約束、跟車約束與迴轉禮讓約束
-      const desiredSpeed = Math.min(v.targetSpeed, targetSpeedForSignal, targetSpeedForLead, targetSpeedForYield);
+      // 4.4 計算終點/停車位接近平滑減速 (車輛平滑降速緩緩滑入路邊車位，呈現優雅泊車過渡感)
+      let targetSpeedForArrival = v.targetSpeed;
+      if (rwps.length >= 2) {
+        let distToEnd = 0;
+        for (let k = v.currentWaypointIndex; k < rwps.length; k++) {
+          const prev = k === v.currentWaypointIndex ? v.currentPosition : rwps[k - 1].position;
+          distToEnd += prev.distanceTo(rwps[k].position);
+        }
+        if (distToEnd < 3.2) {
+          // 在最後 3.2m 內，以平緩減速曲線降速至怠速泊車 (1.8 ~ 2.2 m/s)
+          const creepSpeed = 1.8;
+          const slowDownSpeed = Math.sqrt(2 * (v.deceleration * 0.7) * distToEnd);
+          targetSpeedForArrival = Math.max(creepSpeed, Math.min(v.targetSpeed, slowDownSpeed));
+        }
+      }
+
+      // 4.5 融合號誌約束、跟車約束、迴轉禮讓約束與終點停車減速
+      const desiredSpeed = Math.min(v.targetSpeed, targetSpeedForArrival, targetSpeedForSignal, targetSpeedForLead, targetSpeedForYield);
       const maxAllowedMove = Math.min(maxSignalMove, maxLeadMove, maxYieldMove);
 
       // 4.6 平滑加減速更新
@@ -608,13 +679,14 @@ export class VehicleManager {
         v.speed = Math.min(desiredSpeed, v.speed + v.acceleration * deltaTime);
       }
 
-      // 4.7 狀態判定 (停等紅燈、路口淨空停等、跟車停等或禮讓停等)
+      // 4.7 狀態判定 (停等紅燈、路口淨空停等、禮讓行人停等、跟車停等或禮讓對向車停等)
       const isStoppedForLight = isRedOrYellow && distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.08;
       const isStoppedForBox = isBoxBlocked && distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.08;
+      const isStoppedForPed = v.isYieldingToPedestrian && (distToStopLine <= VehicleManager.STOP_LINE_BUFFER + 0.08 || targetSpeedForLead === 0);
       const isStoppedForCar = leadInfo !== null && leadInfo.leadVehicle.speed <= 0.05 && leadInfo.distance <= VehicleManager.MIN_FOLLOWING_DIST + 0.08;
       const isWaitingYield = targetSpeedForYield === 0;
 
-      if (v.speed <= 0.05 && (isStoppedForLight || isStoppedForBox || isStoppedForCar || isWaitingYield)) {
+      if (v.speed <= 0.05 && (isStoppedForLight || isStoppedForBox || isStoppedForPed || isStoppedForCar || isWaitingYield)) {
         v.state = 'WaitingLight';
         v.speed = 0;
       } else {

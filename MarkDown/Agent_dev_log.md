@@ -2078,5 +2078,324 @@
      - 市民隨機通勤按鈕與工廠內部人數更新運作如常。
 - **Git 狀態**：維持工作區變更，**嚴格未建立任何額外 GIT 提交**。
 
+---
+
+## [2026-11-11] 第 36 輪作業：行人遵守紅綠燈與轉彎車輛禮讓行人防死鎖機制實作
+
+### 本輪更新摘要
+- **目標與需求背景**：
+  1. 市民行人步行穿越馬路時必須遵守路口交通紅綠燈（紅燈/黃燈停等路緣石；綠燈放行穿越）。
+  2. 若車輛也是綠燈要轉彎（右轉、左轉、迴轉），行人具有絕對優先路權！轉彎車必須檢測轉入路口臂之斑馬線是否有行人正在穿越。
+  3. 若有行人正在穿越，轉彎車輛**嚴禁駛入路口**，必須在路口停止線前停等，直到沒有行人在過馬路為止。此設計同時杜絕了車輛卡死在路口黃網線內部造成的經典死鎖（Deadlock）問題。
+  4. 嚴格遵守約束：不建立 GIT 版本。
+
+### 核心實作內容
+1. [`src/systems/PedestrianNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/PedestrianNetwork.ts)：
+   - 在 `PedestrianWaypoint`、`PedestrianEdge` 與 `PedestrianNode` 擴充號誌感知中繼資料：`isCrosswalkStart`（路緣石停等點）、`intersectionKey`（所屬路口）、`crosswalkArm`（'N'|'S'|'E'|'W' 橫跨之路口臂）與 `pedestrianSignal`（'northSouth'|'eastWest' 控制該斑馬線通行之號誌綠燈相）。
+   - 新增靜態方法 `getCrosswalkArmAndSignal(gx, gz, crosswalkPos)`，依斑馬線幾何世界座標精準映射其所屬路口臂與通行號誌相。
+   - 在十字路口（FourWay）與 T 字路口（ThreeWay）的所有斑馬線邊打上專屬路口臂與受控號誌相標記。
+   - `reconstructPath` 與 `findPathBetweenBuildings` 將完整包含號誌屬性之 `routeWaypoints` 傳回。
+2. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+   - `MovingInPedestrian` 介面新增 `routeWaypoints`、`isWaitingLight`、`isCrossingCrosswalk`、`crossingIntersectionKey`、`crossingArm`。
+   - 市民步行狀態機更新：
+     - 行人抵達路緣石即將踏上斑馬線時，檢測對應路口號誌之行人綠燈相。
+     - 若為紅燈或黃燈：`isWaitingLight = true; isCrossingCrosswalk = false;`，重置為站立姿態，在路緣石安全停等，停止前進。
+     - 若為綠燈：`isWaitingLight = false; isCrossingCrosswalk = true;`，踏入斑馬線安全橫越。
+     - 穿越途中號誌變換不強制中斷，行人安全走完斑馬線登上對側人行道後自動解除過馬路狀態（`isCrossingCrosswalk = false`）。
+   - 新增 `isPedestrianCrossingCrosswalk(intersectionKey, arm)` 供車輛精準查詢特定路口指定臂是否正有行人穿越。
+   - 新增 `findPedestrianAhead(vehiclePos, headingY, maxDist)` 供車輛進行前向近距離行人防撞安全禮讓。
+   - 懸停卡片與 UI 動態呈現 `🚶 停等紅綠燈` 與 `🚸 穿越斑馬線` 即時狀態。
+3. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)：
+   - 注入 `buildingManager`。
+   - `ActiveVehicle` 擴充 `isYieldingToPedestrian` 屬性。
+   - 轉彎車禮讓機制：車輛接近路口停止線時，若前方車道為轉向車道（右轉、左轉、迴轉），解析目標路口臂 `toDir`，查詢 `buildingManager.isPedestrianCrossingCrosswalk(stopWp.intersectionKey, toDir)`。
+   - 若有行人穿越：`isYieldingToPedestrian = true; mustHoldAtStopLine = true;`，車輛平滑制動並於停止線前停等，**嚴禁衝入路口內部**。
+   - 當行人全數通過斑馬線後，`isYieldingToPedestrian` 自動解除，轉彎車起步完成轉彎。
+   - 行駛中若車輛已在路口內或直行遇突發狀況，觸發 `findPedestrianAhead` 進行即時安全防撞禮讓。
+4. [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)：
+   - 串聯 `vehicleManager.setBuildingManager(buildingManager)`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯 0 錯誤，Vite 成功建置。
+- **單元邏輯驗證（4 大情境 100% 通過）**：
+  1. 斑馬線方位臂與號誌綠燈相完美對齊（北/南口斑馬線受 `eastWest` 控制；東/西口斑馬線受 `northSouth` 控制）。
+  2. 行人紅燈路緣石停等、綠燈通行機制狀態機轉移完全正確。
+  3. 轉彎車精準檢測目標路口臂斑馬線行人，並於停止線前嚴格阻擋（`mustHoldAtStopLine = true`），行人穿越完畢後順暢放行。
+  4. 直行車輛不受非路徑斑馬線行人阻礙，維持順暢通行。
+- **Git 狀態**：嚴格遵循指示，**不建立 GIT 版本**。
 
 
+---
+
+## [2026-11-11] 第 48 輪作業：穩定版 Git 存檔推送、行人專屬路網系統 (PedestrianNetwork) 開發與市民走路上班動線重構
+
+### 本輪更新重點
+- **需求目標**：
+  1. 將前一階段穩定運行版本（包含 T 字與十字路口迴轉車道、A* 阻抗懲罰與對向衝突禮讓）建立 Git Commit（`3e10fe0`）並推送至 GitHub。
+  2. 解決市民走路去上班會走機動車道的瑕疵，開發專屬行人路網拓撲與行人路徑規劃系統（Pedestrian Pathfinding Engine）。
+  3. 保證市民步行完全依循兩側高架立體人行道（離地高度 $y = 0.07\text{m}$）與路口枕木紋斑馬線（$y = 0.045\text{m}$），絕對不走入車道中線。
+  4. 實施門對門（Door-to-Door）完整人行動線：起點住宅房門 $\to$ 住宅庭院大門 $\to$ 人行道路網 $\to$ 斑馬線穿越道 $\to$ 工廠外門 $\to$ 廠區大門。
+  5. 在 DevMenu 提供「🚸 切換顯示人行道與斑馬線尋路網格」可視化調試切換功能。
+  6. **嚴格遵守約束**：修改完成後**嚴格不建立新的 GIT 版本**，維持工作區乾淨變更。
+
+### 本輪修改與新增檔案清單
+1. [`src/systems/PedestrianNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/PedestrianNetwork.ts)（**全新核心模組**）：
+   - 封裝 `PedestrianNetwork` 類別，構建全市連續且具備連通性的雙向人行道路網。
+   - 支援所有道路類型：
+     - `Straight`：兩側平行高架人行道（偏離道路中線 $0.89\text{m}$）。
+     - `DeadEnd`：盡頭路段除兩側人行道外，末端自動補全行人掉頭/橫越穿越道。
+     - `FourWay`：四個轉角人行廣場小平台，並橫跨四路口生成 4 處枕木紋斑馬線穿越道。
+     - `ThreeWay`：無路側維持直線無縫貫通高架人行道；有路側各角落平台與 3 處路口斑馬線穿越道。
+     - `Corner`：外側連續圓滑轉彎人行道與內側角落平台。
+   - 跨路塊毫米級節點量化融合（`p_X_Z`）：相鄰路塊接縫處端點（$X = gx \pm 0.89, Z = gz \pm 1.0$）自動完美融合為同一節點，0 接縫阻隔。
+   - 專用行人雙向 A* 尋路核心（`findShortestPath`）：
+     - 邊成本計算：人行道採歐幾里得距離；斑馬線橫越賦予 $+0.8\text{m}$ 等效阻抗，避免無謂橫跨馬路。
+     - 支援門對門尋路（`findPathBetweenBuildings`）：自動串接住宅房門、大門、人行道路網、斑馬線與工廠入口。
+   - 內建 3D 調試可視化線段層（`PedestrianNetwork_Debug`）：青色代表高架人行道，橙黃色代表斑馬線穿越道，藍色/黃色小方塊代表拓撲節點。
+2. [`src/systems/RoadNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/RoadNetwork.ts)：
+   - 實例化並管理 `pedestrianNetwork`，掛載除錯群組至場景。
+   - 在 `rebuildLaneGraph()` 完成機動車道拓撲後，自動觸發 `this.pedestrianNetwork.rebuild(this.tiles)`，確保道路任何增減變更時人行路網 100% 同步更新。
+   - 暴露 `getPedestrianNetwork(): PedestrianNetwork`。
+3. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+   - 引用 `PedestrianNetwork`。
+   - 重構 `testRandomCitizenCommute()` 中的步行上班動線：
+     - 徹底廢止原先誤用機動車車道 `findBestRoadPath` 之邏輯。
+     - 改以 `this.pedestrianNetwork.findPathBetweenBuildings(homeBuilding, targetFactory)` 精確規劃人行動線。
+     - 步行航點高度調整至 $0.07\text{m}$（立體高架人行道面高）與 $0.045\text{m}$（斑馬線），徹底告別機動車道穿行。
+     - 決策說明 log 動態注入人行道總長與行經斑馬線數。
+     - 提供 `createDirectPedestrianFallback` 安全行人直達備援機制。
+   - 市民下車入住與工廠下車步行進入廠區高度修正為人行道標準高度 $0.07\text{m}$。
+4. [`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)：
+   - 在通勤卡片下方新增「🚸 切換顯示人行道與斑馬線尋路網格」按鈕與點擊切換邏輯。
+   - 點擊後即時顯示全城人行道網格與斑馬線穿越線，並即時回饋節點與斑馬線統計數量。
+5. [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)：
+   - 暴露 `THREE` 與 `pedestrianNetwork` 至全域 `window.__cityDome`。
+6. [`MarkDown/task_quene.md`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/MarkDown/task_quene.md)：
+   - 標記完成「走路上班應該走人行道不是車道」。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯 0 錯誤，Vite 成功建置。
+- **單元演算法測試（Node 原生 ES 模組）**：
+  - 相鄰路塊接縫節點（$X = 0.11, Z = 2.00$）融合驗證成功（邊數 = 2）。
+  - 同側人行道尋路：直通直達，斑馬線數 = 0，無任何橫越馬路。
+  - 對側人行道尋路：精確經由 2 處斑馬線穿越，航點高度與座標 100% 落於人行道與斑馬線內。
+  - T 字路口貫通性：西側無路端連續人行道完全貫通，0 斑馬線直通。
+  - 90 度彎道測試：外側平滑轉彎（7 節點）、內側平滑轉彎（5 節點）100% 通過。
+- **無頭瀏覽器實測驗證（Chrome / Edge CDP 自動化測試）**：
+  - 網頁端加載成功，`window.__cityDome.pedestrianNetwork` 成功就緒。
+  - 道路鋪設後行人路網動態擴充至 433 節點、436 邊、16 處斑馬線。
+  - 劃分土地分區後住宅與工廠順利起建並入住市民。
+  - 門對門人行動線規劃成功（住宅門口 $0.04\text{m} \to$ 庭院外大門 $0.07\text{m} \to$ 全程高架人行道 $0.07\text{m} \to$ 工廠外門 $0.07\text{m} \to$ 廠區門口 $0.04\text{m}$）。
+  - 觸發市民步行上班：市民依循人行動線出發，成功就職於工廠。
+  - DevMenu「🚸 切換顯示人行道與斑馬線尋路網格」按鈕觸發成功，435 枚 3D 視覺化元件即時呈現。
+- **Git 狀態**：維持工作區變更，**嚴格未建立任何額外 GIT 提交**。
+
+---
+
+## [2026-11-11] 第 36 輪作業：行人遵守紅綠燈與轉彎車輛禮讓行人防死鎖機制實作
+
+### 本輪更新摘要
+- **目標與需求背景**：
+  1. 市民行人步行穿越馬路時必須遵守路口交通紅綠燈（紅燈/黃燈停等路緣石；綠燈放行穿越）。
+  2. 若車輛也是綠燈要轉彎（右轉、左轉、迴轉），行人具有絕對優先路權！轉彎車必須檢測轉入路口臂之斑馬線是否有行人正在穿越。
+  3. 若有行人正在穿越，轉彎車輛**嚴禁駛入路口**，必須在路口停止線前停等，直到沒有行人在過馬路為止。此設計同時杜絕了車輛卡死在路口黃網線內部造成的經典死鎖（Deadlock）問題。
+  4. 嚴格遵守約束：不建立 GIT 版本。
+
+### 核心實作內容
+1. [`src/systems/PedestrianNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/PedestrianNetwork.ts)：
+   - 在 `PedestrianWaypoint`、`PedestrianEdge` 與 `PedestrianNode` 擴充號誌感知中繼資料：`isCrosswalkStart`（路緣石停等點）、`intersectionKey`（所屬路口）、`crosswalkArm`（'N'|'S'|'E'|'W' 橫跨之路口臂）與 `pedestrianSignal`（'northSouth'|'eastWest' 控制該斑馬線通行之號誌綠燈相）。
+   - 新增靜態方法 `getCrosswalkArmAndSignal(gx, gz, crosswalkPos)`，依斑馬線幾何世界座標精準映射其所屬路口臂與通行號誌相。
+   - 在十字路口（FourWay）與 T 字路口（ThreeWay）的所有斑馬線邊打上專屬路口臂與受控號誌相標記。
+   - `reconstructPath` 與 `findPathBetweenBuildings` 將完整包含號誌屬性之 `routeWaypoints` 傳回。
+2. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+   - `MovingInPedestrian` 介面新增 `routeWaypoints`、`isWaitingLight`、`isCrossingCrosswalk`、`crossingIntersectionKey`、`crossingArm`。
+   - 市民步行狀態機更新：
+     - 行人抵達路緣石即將踏上斑馬線時，檢測對應路口號誌之行人綠燈相。
+     - 若為紅燈或黃燈：`isWaitingLight = true; isCrossingCrosswalk = false;`，重置為站立姿態，在路緣石安全停等，停止前進。
+     - 若為綠燈：`isWaitingLight = false; isCrossingCrosswalk = true;`，踏入斑馬線安全橫越。
+     - 穿越途中號誌變換不強制中斷，行人安全走完斑馬線登上對側人行道後自動解除過馬路狀態（`isCrossingCrosswalk = false`）。
+   - 新增 `isPedestrianCrossingCrosswalk(intersectionKey, arm)` 供車輛精準查詢特定路口指定臂是否正有行人穿越。
+   - 新增 `findPedestrianAhead(vehiclePos, headingY, maxDist)` 供車輛進行前向近距離行人防撞安全禮讓。
+   - 懸停卡片與 UI 動態呈現 `🚶 停等紅綠燈` 與 `🚸 穿越斑馬線` 即時狀態。
+3. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)：
+   - 注入 `buildingManager`。
+   - `ActiveVehicle` 擴充 `isYieldingToPedestrian` 屬性。
+   - 轉彎車禮讓機制：車輛接近路口停止線時，若前方車道為轉向車道（右轉、左轉、迴轉），解析目標路口臂 `toDir`，查詢 `buildingManager.isPedestrianCrossingCrosswalk(stopWp.intersectionKey, toDir)`。
+   - 若有行人穿越：`isYieldingToPedestrian = true; mustHoldAtStopLine = true;`，車輛平滑制動並於停止線前停等，**嚴禁衝入路口內部**。
+   - 當行人全數通過斑馬線後，`isYieldingToPedestrian` 自動解除，轉彎車起步完成轉彎。
+   - 行駛中若車輛已在路口內或直行遇突發狀況，觸發 `findPedestrianAhead` 進行即時安全防撞禮讓。
+4. [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)：
+   - 串聯 `vehicleManager.setBuildingManager(buildingManager)`。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`，TypeScript 編譯 0 錯誤，Vite 成功建置。
+- **單元邏輯驗證（4 大情境 100% 通過）**：
+  1. 斑馬線方位臂與號誌綠燈相完美對齊（北/南口斑馬線受 `eastWest` 控制；東/西口斑馬線受 `northSouth` 控制）。
+  2. 行人紅燈路緣石停等、綠燈通行機制狀態機轉移完全正確。
+  3. 轉彎車精準檢測目標路口臂斑馬線行人，並於停止線前嚴格阻擋（`mustHoldAtStopLine = true`），行人穿越完畢後順暢放行。
+  4. 直行車輛不受非路徑斑馬線行人阻礙，維持順暢通行。
+- **Git 狀態**：嚴格遵循指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-11] 第 37 輪作業：外環聯外道路進城車輛雙向隨機進入機制實作
+
+### 本輪更新摘要
+- **問題診斷與成因分析**：
+  - 用戶反饋：外環道路進入的車輛總是從某一個固定方向進入，不符合真實邏輯，應具備兩個方向（東側/西側）隨機進入之能力。
+  - 核心成因：在 [`BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts) 的 `dispatchCitizenVehicle` 中，原先路徑評估邏輯在候選車道循環內依序計算西側進口 `pW` 與東側進口 `pE`，並以 `pE.totalDistance < lanePath.totalDistance` 進行純距離取短。由於城市與外環公路相交之座標點固定，對特定街區或建築而言，其中一側之公路行駛距離永遠恆小於另一側，導致 100% 確定性地單向進入。此外 [`RoadNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/RoadNetwork.ts) 的 `getExternalSpawnLane` 原先亦以 `west || east` 造成單向西側偏斜。
+- **實作內容**：
+  1. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+     - 重構 `dispatchCitizenVehicle` 中的進城路徑規劃邏輯。
+     - 封裝 `findBestPathForEntry(entry)`，分別獨立搜尋自西側進口（`lane_-99_97_E`）與東側進口（`lane_99_97_W`）出發抵達目的地路塊之最佳路徑（優先順向停靠候選車道，次選退回車道）。
+     - 雙向隨機選擇機制：
+       - 若兩側進口皆可達且停車偏好匹配度相同，以 `Math.random() < 0.5`（各 50% 機率）隨機選自西側或東側進口駛入。
+       - 若僅一側能停靠首選車道，以首選車道優先以保障路緣順行停車體驗。
+       - 若僅其中一側與城市相通（單側連通極端情況），優雅退回唯一可達之一側，零失敗風險。
+  2. [`src/systems/RoadNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/RoadNetwork.ts)：
+     - 修正 `getExternalSpawnLane()`：當東西雙向進口皆存在時，以 50% 機率隨機回傳西側或東側進城起點車道，杜絕單向西側死板偏斜。
+- **驗證結果**：
+  - 執行 `cmd /c "npm run build"`，TypeScript 編譯與 Vite 打包 0 錯誤通過。
+  - 10,000 次隨機分配統計模擬顯示西側與東側呈現均勻 50.48% : 49.52% 分布。
+- **Git 狀態**：嚴格遵循指示，**不建立 GIT 版本**。
+
+
+---
+
+## [2026-11-11] 第 51 輪作業：行人上車尋路系統 (PedestrianNetwork) 整合與遠距動線最佳化
+
+### 本輪更新摘要
+- **問題診斷與成因剖析**：
+  - 用戶指出：「行人上車時也應該要使用尋路系統，確保車子在比較遠的地方時，他直接直線從家走到車的位置（現在就是這樣，不合理）。」
+  - 核心成因：在 [`BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts) 的 `testRandomCitizenCommute` 中，開車模式原先僅以 `[ homeBuilding.frontWorldPos.clone(), carSpotPos.clone() ]` 兩點直接產生直線航點序列，且未提供 `routeWaypoints`。
+  - 當車輛停放在較遠處（如鄰近其他路塊、轉彎後路段或道路對側）時，市民直接從住宅門前斜穿草皮、建築與車道走向車輛，無視人行道、路口號誌與斑馬線。
+- **實作內容**：
+  1. [`src/systems/PedestrianNetwork.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/PedestrianNetwork.ts)：
+     - 新增 `findPathToCar(originBuilding, carPosition, carSpot)`：
+       - 起點序列：自住宅大門 (`homeDoor`，$y=0.04\text{m}$) 出發，經由庭院步道抵達外庭大門 (`homeGate`，$y=0.07\text{m}$) 踏上立體高架人行道。
+       - 終點吸附：精準計算車位鄰接之人行道側登車等待點 (`sidewalkBoarding`，距道路中線 $0.89\text{m}$，高 $0.07\text{m}$)，由 A* 演算法在立體人行道有向圖中搜尋最佳動線。
+       - 登車步進：自人行道邊緣安全降至車側門邊 (`carBoarding`，$y=0.02\text{m}$)。
+       - 號誌感知：完整攜帶 `isCrosswalk`、`intersectionKey`、`crosswalkArm` 與 `pedestrianSignal` 航點資訊，遇路口紅燈自動停等、綠燈安全穿越斑馬線，且行經斑馬線時觸發轉彎車輛於停止線前停等禮讓。
+     - 新增 `findPathFromCarToBuilding(carPosition, destBuilding, carSpot)`：
+       - 支援工廠或目的地停車下車後，行人自停靠車位旁登臨人行道，循路網安全步行進入建築大門。
+     - 增強 `findClosestNode` 與 `findShortestPath`：
+       - 支援 `preferSidewalkEnds: true`，起迄點優先吸附至人行道邊緣節點，避免直接誤連至車道中央之斑馬線節點。
+  2. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+     - `testRandomCitizenCommute` 整合 `findPathToCar` 與 `findPathFromCarToBuilding`。
+     - 注入 `routeWaypoints`，使市民走向車輛途中具備紅綠燈感知與斑馬線路權狀態轉移能力。
+     - 車輛起步行駛改以實際停車路塊 `carSpot.tileKey` 為起點，確保市民走到車輛上車後車輛順暢起步。
+     - 懸停卡片 UI 即時呈現 `🚶 走向車輛中`、`🚦 停等紅綠燈 (走向車輛)`、`🚸 穿越斑馬線 (走向車輛)` 與 `🚗 開車出行` 動態狀態。
+  3. [`src/simulation/ParkingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/ParkingManager.ts)：
+     - 新增 `getParkedCar(id: string)` 支援根據停車 ID 精準反查車位與朝向。
+- **驗證結果**：
+  - 執行 `cmd /c "npm run build"`，TypeScript 編譯與 Vite 打包 0 錯誤通過。
+  - 執行單元與整合測試，包含：
+    1. 同側遠距車輛尋路：完整沿東側人行道航點（$X=0.89\text{m}$）步進抵達，杜絕直線斜切。
+    2. 道路對側車輛尋路：經由路口斑馬線與號誌相安全過馬路，再沿對側人行道抵達車輛。
+    3. 轉彎後路段車輛尋路：沿轉角人行道圓弧轉向到達車旁。
+  - **Git 狀態**：嚴格遵循指示，**不建立 GIT 版本**。
+
+
+---
+
+## [2026-11-11] 第 52 輪作業：靠右行駛路邊車位起步與目的地停車瞬移修復（禁止逆向跨車道瞬移）
+
+### 本輪更新重點
+- **用戶核心需求**：
+  1. 「車子明明停在左方車道的方向，市民一上車卻自動把車傳送到了右側車道的方向，這樣不對需要修改。」
+  2. 「到工廠下車時也是，明明工廠在此方向的逆向的那條車道的位置，車子卻瞬間移動到對向並停好，不正確。」
+  3. 「到達目的地(貼近目的地建築方向的馬路)後在就近尋找車位時只能判定車道右側的車位(因為是靠右行駛，這樣才是該方向的車位)。」
+  4. 嚴格約定：**不建立 GIT 版本**。
+- **根本原因診斷**：
+  1. **起步出發瞬移**：在 `BuildingManager.findBestRoadPath` 中，過去直接遍歷該路塊所有車道，因目標工廠在北方，北向車道（東側）到工廠之 A* 距離短於南向車道（西側，需往南繞行迴轉），導致車輛無視其停在西側路緣（南向車道旁），直接被指派從東側北向車道起步，市民一上車車輛便瞬移穿越雙黃線到對向車道。且出發路徑若以車道起點為第一個節點，會導致車輛沿著車道往後瞬移跳躍。
+  2. **抵達停車瞬移**：在車輛抵達工廠路塊時，`findClosestAvailableSpot` 未限制停車側，直接搜尋離工廠大門最近之車位。若工廠位於道路對側（如車輛沿順向車道北行，工廠位於西側），系統直接挑選了西側路緣車位，並以 `parkExistingCarMesh` 強制瞬移穿越對向車道與雙黃線停入，且車頭調頭 180 度逆向停放。
+- **實作內容**：
+  1. [`src/simulation/ParkingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/ParkingManager.ts)：
+     - 新增靠右行駛靜態轉換工具：
+       - `getRightSideForDirection(dir)`：N->east, S->west, E->south, W->north。
+       - `getDirectionForSide(side)`：west->S, east->N, north->W, south->E。
+       - `getPreferredArrivalDirection(roadTile, buildingFrontPos)`：依建築正面相對於道路之方位，推算車輛若要停靠在該建築同側路緣時之偏好抵達行車方向。
+     - 升級 `findClosestAvailableSpot(homePos, preferredTileKey, allowedSide)`：
+       - 支援 `allowedSide` 嚴格過濾車位側邊，完全限制車輛只能判定並停靠於其行駛車道右側之合法路緣車位，杜絕跨越對向雙黃線違規逆向停車。
+  2. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+     - 升級 `findBestRoadPath(originTileKey, destTileKey, requiredStartDir, preferredGoalDir)`：
+       - 嚴格限制起步車道必須匹配車位朝向順行方向（`requiredStartDir`），禁止跨越車道起步。
+       - 支援偏好目標車道（`preferredGoalDir`），同側車道享有 50m 虛擬權重優勢，促使車輛在路網中主動循路迴轉至工廠同側順向車道。
+     - 新增 `attachCurbsideDeparture(drivePath, carSpot)`：
+       - 將出發路徑之第 0 個航點精準綁定於車輛停放座標（`carSpot.position`），並剪除車身後方之車道起點航點，實現自路邊車位平滑斜向匯入順向車道，絕不倒退瞬移。
+     - 抵達停車靠右行駛重構：
+       - 車輛抵達工廠時，根據最後行駛向量判定實際抵達方向 `finalDir`。
+       - 以 `allowedParkingSide = ParkingManager.getRightSideForDirection(finalDir)` 嚴格限縮只能搜尋車道右側車位。
+       - 若工廠在道路對向，車輛守法停於自身車道右側路緣，市民下車後透過 `findPathFromCarToBuilding` 經人行道與斑馬線安全穿越馬路進入工廠。
+     - 住宅遷入車道匹配優化：呼叫 `ParkingManager.getDirectionForSide` 統一邏輯。
+- **驗證結果**：
+  - 執行 `cmd /c "npm run build"`，TypeScript 編譯與 Vite 打包 0 錯誤通過。
+  - 執行 `scratch/test_lane_parking_commute.ts` 整合測試，驗證以下 4 大關鍵情境 100% 通過：
+    1. 西側路緣車輛（朝南）起步時嚴格選擇南向車道 `laneS`，絕不瞬移到北向車道。
+    2. 東側路緣車輛（朝北）起步時嚴格選擇北向車道 `laneN`。
+    3. 抵達時北向行駛（N）嚴格只能停入東側（east）車位；南向行駛（S）嚴格只能停入西側（west）車位；東向（E）只能停南側（south）；西向（W）只能停北側（north）。
+  - **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 提交**。
+
+
+---
+
+## [2026-11-11] 第 53 輪作業：目的地路邊停車過渡性平滑進場動線實作（告別瞬間移動，自然斜向切入泊車）
+
+### 本輪更新重點
+- **用戶核心需求**：
+  - 「很好 剛剛的改動都成功了。現在看來上路已經有一個過渡性的畫面了(車不會直接瞬間移動到車道上 而是有類似開出來的畫面)，但是停車的部分還沒有，還是使用瞬間移動的狀態，現在請也使用較過渡性(像是上路那樣)的畫面，處理停車的畫面。不建立GIT 版本」
+- **問題核心與技術分析**：
+  - **先前停車瞬移成因**：車輛沿導航路徑 `drivePath` 行駛至車道終點後觸發 `onArrived`，此時才呼叫 `findClosestAvailableSpot` 尋找車位，並在 `parkExistingCarMesh` 中瞬間以 `mesh.position.copy(spot.position)` 強制將車輛自車道橫向瞬移至路緣車位中。
+  - **過渡性進場動線設計**：在車輛出發規劃階段，即鎖定並預約目的地靠右行駛之合法車位 `destParkSpot`。新增 `attachCurbsideArrival`，在目標車道尾端動態注入四階流暢泊車動線：「車道切入點 $\to$ 斜向進場點 $\to$ 路緣平行對齊點 $\to$ 最終停車位」，讓車輛在行駛到達目的地前，自然向右打方向盤斜向駛入路邊車位，車身回正並優雅減速停妥。
+- **實作內容**：
+  1. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+     - 新增 `attachCurbsideArrival(drivePath, parkSpot)`：
+       - `turnInPoint`（車道切入點）：在車位前進方向前方 0.65m 處，車輛仍在車道中心線上。
+       - `midPoint`（斜向進場過渡點）：前進約 0.35m，橫向向右偏移 55%（約 0.16m），前輪微打轉向右側路緣。
+       - `alignPoint`（路緣平行對齊點）：已達路緣側邊（橫向偏移 100%，即 0.295m），距離車位 0.12m，車頭完全回正與道路平行。
+       - `spotTarget`（最終停車點）：精確抵達路邊車位座標 `parkSpot.position`。
+       - 剪除原路徑中超過切入點的前方節點，防止衝過頭後倒退，實現一氣呵成的自然泊車過渡畫面。
+     - 重構 `testRandomCitizenCommute`：出發時即依抵達方向鎖定並預約 `destParkSpot`，調用 `attachCurbsideArrival` 串接進場過渡路徑。車輛到達時座標已在車位上，`parkExistingCarMesh` 實現 0 位移、0 角度跳躍之無縫接軌。
+     - 重構 `moveInCitizen`（新屋遷入）：將舊版簡易線性內插升級為調用 `attachCurbsideArrival`，遷入與通勤共用專業級泊車動線。
+  2. [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts)：
+     - 新增 `targetSpeedForArrival`：當車輛距終點小於 3.2m 時，透過減速動力學曲線平滑由巡航速度（6.5 m/s）平緩降速至怠速泊車爬行速度（1.8 m/s），防止高速衝進車位急煞，完美呈現真車臨停靠邊之自然過渡感。
+- **驗證結果**：
+  - 執行 `cmd /c "npm run build"`，TypeScript 編譯與 Vite 打包 0 報錯通過。
+  - 執行 `scratch/test_lane_parking_commute.ts`（包含 Test 5 泊車動線專屬測試）：
+    - 驗證車道切入點座標嚴格位於車道中心線（X=0.675）。
+    - 驗證斜切進場段平滑向右偏移至 X=0.513。
+    - 驗證路緣對齊段（X=0.380）前進方向與道路路緣完全平行（橫向偏差 0.000m）。
+    - 驗證最終停靠點與車位座標完全重合（距離差 0.000m），徹底告別瞬間移動！
+  - **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 提交**。
+
+
+---
+
+## [2026-11-11] 第 54 輪作業：修復車輛無視道路直線飛越 BUG（全面保護起點與沿途道路節點）
+
+### 本輪更新重點
+- **用戶核心需求**：
+  - 「我在測試上班功能時，發現有些車子出發後會直接無視道路，直接是直線開往上班處，這是一個很嚴重的BUG，另外，在遷入時也有部分車輛發生這個問題，請發現問題並徹底修復，修復後請做測試。不建立GIT 版本」
+- **問題核心與技術分析**：
+  - **根本原因診斷**：
+    1. **抵達停車動線過度剪除 (`attachCurbsideArrival`)**：
+       - 前版程式碼在遍歷導航路徑節點時，以 `toTurnIn = wp.position - turnInPoint` 配合 `toTurnIn.dot(dirVec) >= -0.1` 進行剪除判定。
+       - 然而 `dirVec` 僅為「目標車道」之行駛方向，當車輛自遠方高速公路（如 Z=97）或距離目的地坐標較大之住宅出發且朝南時，第 0 個節點的 `(97 - 4.35) * 1 = +92.65` 便已觸發 `>= -0.1`，導致迴圈在 $i=0$ 時即刻 `break` 終止！
+       - 結果導致整條數十個道路航點（高速公路、沿途轉彎、路口號誌）被全數剪除，整條路徑被截斷為僅剩「起點 $\to$ 車道切入點」，車輛因而無視任何道路，以直線穿透全圖所有建築與綠地飛往目的地！遷入時所有朝南行車之新屋車輛亦全面觸發此 BUG。
+    2. **起步出發動線潛在斷路 (`attachCurbsideDeparture`)**：
+       - 前版在搜尋車位前方節點 `firstAheadIdx` 時，若路線出發即遇轉向（如轉向東西向），導致後續節點在起步方向投影距離皆小於門檻，觸發 fallback，使整條路徑僅保留「車位座標 $\to$ 路徑終點」，車輛同樣被截斷為直線飛越。
+- **實作內容**：
+  1. [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)：
+     - **徹底重構 `attachCurbsideArrival`**：
+       - 鎖定終點車道 `destLaneId = rwps[rwps.length - 1].laneId`。
+       - 嚴格保留到達終點車道之前的所有歷史路徑節點（高速公路、轉角、交叉路口等 100% 完整保留，`for (let i = 0; i < firstDestLaneIdx; i++) newRwps.push(...)`）。
+       - 僅在終點車道內部篩選超過切入點之節點，最後注入泊車四階動線。
+     - **徹底重構 `attachCurbsideDeparture`**：
+       - 鎖定起步車道 `startLaneId = rwps[0].laneId`。
+       - 僅在起步車道內部剔除車身後方節點，一旦車輛駛離起步車道（`wp.laneId !== startLaneId`），後續沿途所有車道節點 100% 完整保留。
+- **驗證結果**：
+  - 執行 `scratch/test_lane_parking_commute.ts`：
+    - **Test 6（長途/高速公路遷入動線保留）**：驗證自 Z=97 出發經過 Z=50、Z=10、Z=4.0 之所有沿途航點 100% 完整保留，不再被截斷為直線飛越。
+    - **Test 7（多車道轉向出發動線保留）**：驗證西側路緣起步後經過轉向路口（X=-1）之沿途節點 100% 完整保留。
+  - 執行 `cmd /c "npm run build"`，TypeScript 編譯與 Vite 打包 0 錯誤通過。
+  - **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 提交**。
