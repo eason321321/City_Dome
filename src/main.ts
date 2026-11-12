@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CameraManager } from './rendering/CameraManager';
 import { TerrainRenderer } from './rendering/TerrainRenderer';
+import { EnvironmentManager } from './rendering/EnvironmentManager';
 import { WorldSimulationState, SimulationSpeed, MapOverlayMode } from './types';
 import { TimeManager } from './simulation/TimeManager';
 import { BottomStatusBar } from './ui/BottomStatusBar';
@@ -9,6 +10,8 @@ import { ZoningManager } from './systems/ZoningManager';
 import { BuildMenu } from './ui/BuildMenu';
 import { VehicleManager } from './simulation/VehicleManager';
 import { ParkingManager } from './simulation/ParkingManager';
+import { PedestrianManager } from './simulation/PedestrianManager';
+import { CitizenManager } from './simulation/CitizenManager';
 import { DevMenu } from './ui/DevMenu';
 import { BuildingManager } from './systems/BuildingManager';
 import { BackgroundTimer } from './simulation/BackgroundTimer';
@@ -67,26 +70,11 @@ if (container) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
-  // 4. 環境與陽光照明
-  const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x1e293b, 0.7);
-  scene.add(hemiLight);
+  // 4. 自然山脈、海面、大氣漸層天空與 24 小時晝夜動態光影環境
+  const environmentManager = new EnvironmentManager(scene);
 
-  const sunLight = new THREE.DirectionalLight(0xfffbeb, 1.4);
-  sunLight.position.set(80, 120, 60);
-  sunLight.castShadow = true;
-  sunLight.shadow.mapSize.width = 2048;
-  sunLight.shadow.mapSize.height = 2048;
-  sunLight.shadow.camera.near = 10;
-  sunLight.shadow.camera.far = 300;
-  sunLight.shadow.camera.left = -120;
-  sunLight.shadow.camera.right = 120;
-  sunLight.shadow.camera.top = 120;
-  sunLight.shadow.camera.bottom = -120;
-  sunLight.shadow.bias = -0.0005;
-  scene.add(sunLight);
-
-  // 5. 基礎地圖地形與網格
-  new TerrainRenderer(scene);
+  // 5. 3D 海島沙盤地形與智慧點陣網格
+  const terrainRenderer = new TerrainRenderer(scene);
 
   // 6. RTS 專用相機管理器（右鍵旋轉、左鍵平移、滾輪縮放）
   const cameraManager = new CameraManager(camera, renderer.domElement);
@@ -134,31 +122,47 @@ if (container) {
   });
 
   const buildMenu = new BuildMenu(roadManager, zoningManager);
-  void buildMenu;
+  // 建造/分區模式切換時，自動驅動大地網格優雅淡入/淡出
+  buildMenu.onBuildModeChange((isActive) => {
+    terrainRenderer.setGridActive(isActive);
+  });
 
-  // 9. 車輛行駛系統、路邊停車系統與左上角開發者選單
-  const vehicleManager = new VehicleManager(scene, roadManager.getRoadNetwork());
-  const parkingManager = new ParkingManager(scene, roadManager.getRoadNetwork());
+  // 9. 車輛行駛系統、行人移動系統、路邊停車系統與左上角開發者選單
+  const roadNetwork = roadManager.getRoadNetwork();
+  const pedestrianManager = new PedestrianManager(scene, roadNetwork);
+  const vehicleManager = new VehicleManager(scene, roadNetwork);
+  vehicleManager.setPedestrianManager(pedestrianManager);
+
+  const parkingManager = new ParkingManager(scene, roadNetwork);
+  const citizenManager = new CitizenManager(
+    roadNetwork,
+    roadNetwork.getPedestrianNetwork(),
+    pedestrianManager,
+    vehicleManager
+  );
+  citizenManager.setParkingManager(parkingManager);
+
   const devMenu = new DevMenu(
     renderer.domElement,
     camera,
     scene,
     cameraManager,
-    roadManager.getRoadNetwork(),
+    roadNetwork,
     vehicleManager
   );
   devMenu.setParkingManager(parkingManager);
 
-  // 10. 住宅建築生成與市民生命週期管理器
+  // 10. 建築生成與生命週期管理器 (串接獨立之 PedestrianManager 與 CitizenManager)
   const buildingManager = new BuildingManager(
     scene,
     camera,
     renderer.domElement,
     zoningManager,
-    roadManager.getRoadNetwork(),
-    vehicleManager
+    roadNetwork,
+    vehicleManager,
+    pedestrianManager,
+    citizenManager
   );
-  vehicleManager.setBuildingManager(buildingManager);
   buildingManager.setParkingManager(parkingManager);
   devMenu.setBuildingManager(buildingManager);
   devMenu.setTimeManager(timeManager);
@@ -192,8 +196,16 @@ if (container) {
     // 更新車輛行駛與號誌停等模擬
     vehicleManager.update(simDelta, isPaused);
 
-    // 更新建築系統（房屋建造進度、吊臂作業、完工市民開車遷入）
+    // 更新行人移動、斑馬線穿越與進門模擬
+    pedestrianManager.update(simDelta, isPaused);
+
+    // 更新建築系統（房屋建造進度、吊臂作業、完工派車）
     buildingManager.update(simDelta, isPaused);
+
+    // 依累計虛擬分鐘推進全體市民週期狀態檢查與任務列隊（每 10 虛擬分鐘檢查，每 10 次同步找工作）
+    if (!isPaused) {
+      buildingManager.stepCitizenPeriodicSimulation(timeManager.getTotalVirtualMinutes());
+    }
 
     // 動態更新底部狀態欄人口
     const totalPop = buildingManager.getTotalPopulation();
@@ -207,6 +219,12 @@ if (container) {
    * 前景 3D 畫面繪製與相機互動更新 (僅在分頁可見時執行，背景完全釋放 GPU)
    */
   function renderFrame(delta: number): void {
+    // 更新自然環境（動態海浪起伏、低多邊形白雲飄移、24小時晝夜光影與大氣色盤）
+    environmentManager.update(delta, timeManager.getTime());
+
+    // 更新地圖點陣網格平滑透明度漸層
+    terrainRenderer.update(delta);
+
     // 更新開發者選單（模型展台旋轉更新、房屋需求監控等）
     devMenu.update(delta);
 
@@ -264,9 +282,13 @@ if (container) {
   // 暴露全域除錯物件供開發者與測試工具使用
   (window as any).THREE = THREE;
   (window as any).__cityDome = {
+    environmentManager,
+    terrainRenderer,
     roadManager,
     zoningManager,
     buildingManager,
+    pedestrianManager,
+    citizenManager,
     vehicleManager,
     parkingManager,
     devMenu,

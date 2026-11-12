@@ -13,6 +13,7 @@ export class TimeManager {
   private isPaused: boolean = false;
   private timeScale: number = 0.75; // 遊戲模擬速度倍率 (預設 0.75x，依指示適度放慢基本速度提供更舒適觀察節奏)
   private virtualSecondsAccumulator: number = 0;
+  private totalVirtualMinutes: number = 0; // 開局至今累計虛擬遊戲總分鐘數（受暫停與倍速控制）
   
   // 1 實際秒 = 6 虛擬分鐘 (即 10 實際秒 = 1 虛擬小時)
   private virtualSecondsPerRealSecond: number = 360;
@@ -66,6 +67,13 @@ export class TimeManager {
    */
   public getVirtualSecondsPerSimSecond(): number {
     return this.virtualSecondsPerRealSecond;
+  }
+
+  /**
+   * 取得開局至今累計虛擬遊戲總分鐘數（全城任務排程與過期時間共用基準時鐘）
+   */
+  public getTotalVirtualMinutes(): number {
+    return this.totalVirtualMinutes;
   }
 
   /**
@@ -161,6 +169,7 @@ export class TimeManager {
 
     while (this.virtualSecondsAccumulator >= 60) {
       this.virtualSecondsAccumulator -= 60;
+      this.totalVirtualMinutes++;
       this.time.minute++;
       hasChanged = true;
 

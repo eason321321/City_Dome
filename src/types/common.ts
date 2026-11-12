@@ -19,3 +19,8 @@ export interface GridCoord {
 }
 
 export type EntityId = string;
+
+/**
+ * 建築分區密度分級（供共用狀態機依不同密度分級判斷規則）
+ */
+export type BuildingDensityLevel = 'Low' | 'Medium' | 'High';

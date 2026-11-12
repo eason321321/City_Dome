@@ -10,21 +10,3 @@ export enum MapOverlayMode {
   FireRisk = 'FireRisk',                 // 火災風險與消防覆蓋圖
   Zoning = 'Zoning',                     // 土地規劃分區色塊圖
 }
-
-/**
- * 視圖模式色彩漸變定義
- */
-export interface OverlayColorStop {
-  threshold: number;                     // 數值門檻 (0.0 - 1.0)
-  color: string;                         // 顏色碼 (HEX)
-}
-
-/**
- * 視圖濾鏡設定
- */
-export interface OverlayConfig {
-  mode: MapOverlayMode;
-  name: string;
-  description: string;
-  colorStops: OverlayColorStop[];
-}

@@ -1933,3 +1933,196 @@ $$v_{\text{arrival}} = \begin{cases}
   ```
 - **起步車道隔離原則 (Origin Lane Isolation)**：
   同理，車位起步切出動線僅允許在「起步車道」內部剔除車身後方節點。一旦車輛駛離起步車道標記（`hasExitedStartLane = true`），後續沿途所有車道節點一概完整保留，絕不允許因投影方向不符而將整條路線截斷為端點直線。
+
+---
+
+### 四十八、 自然山脈海灣平原與微縮海島沙盤渲染系統架構 (Round 55)
+
+#### 48.1 3D 立體海島沙盤分層架構 (`TerrainRenderer.ts`)
+- **地質分層與高度對齊防衝突矩陣**：
+  為徹底避免三維場景中平面貼圖常見之 Z-fighting 撕裂與紙片薄板感，採用立體階梯式幾何底盤（Diorama Slab）：
+  1. **核心平原建設區 (Buildable Plateau, 200x200m)**：
+     - 幾何厚度 $0.36\text{m}$，中心位置 $Y = -0.20\text{m}$，頂面精準坐落於 $Y = -0.02\text{m}$。
+     - 道路標記、路口斑馬線與土地分區平面均建構於 $Y = 0.00\text{m} \sim 0.005\text{m}$，形成精確的 $0.02\text{m}$ 幾何緩衝層，達成零深度衝突。
+     - 材質套用程序化自然綠地貼圖 (`createGrassTexture`)，以 256x256 離屏畫布生成 650 個低對比森林草叢色塊，重複度設為 $14 \times 14$。
+  2. **海岸沙灘階梯 (Beach Shelf, 200m ~ 232m)**：
+     - 厚度 $0.40\text{m}$，頂面平整座落於 $Y = -0.15\text{m}$，低於綠地平原 $0.13\text{m}$。
+     - 套用程序化金黃沙粒貼圖 (`createSandTexture`)，平緩向海面過渡。
+  3. **沙盤斷崖地基 (Cliff Foundation, 232m ~ 240m)**：
+     - 厚度 $4.60\text{m}$，頂面 $Y = -0.40\text{m}$，底面深入水底 $Y = -5.00\text{m}$。
+     - 材質採用高粗糙度（`roughness: 0.95`）深青灰頁岩（`0x334155`）配合平面著色（`flatShading: true`），營造精緻工藝品沙盤剖面質感。
+
+#### 48.2 智慧漸變點陣網格系統 (Procedural Dot Matrix & Alpha Lerp)
+- **Canvas 程序化點陣紋理 (`createDotGridTexture`)**：
+  - 512x512 畫布代表 10m 主區塊，每區塊 5 等分（對應 2m 次要網格）。
+  - 2m 節點繪製直徑 2.5px 之柔和白色微點（`rgba(248, 250, 252, 0.72)`）。
+  - 10m 節點繪製長度 18px、線寬 2.5px 之發光水藍十字星標記（`rgba(56, 189, 248, 0.95)`）佐以白色核心微點，邊緣輔以微弱水藍虛線導引。
+  - 材質具備 `anisotropy: 8` 與 `wrapS/wrapT: RepeatWrapping`，以單一 Draw Call 覆蓋 200m 可建設區。
+- **狀態響應指數阻尼插值 (Exponential Damped Alpha Lerp)**：
+  - `setGridActive(true)` 設目標透明度為 $0.85$（建造中）；`setGridActive(false)` 設為 $0.08$（平時觀察）。
+  - 每幀執行插值公式：
+    $$\alpha_{t} = \text{lerp}(\alpha_{t-1}, \alpha_{\text{target}}, \min(1.0, \Delta t \times 7.0))$$
+  - 當建造選單關閉時，網格呈現若隱若現的專業微縮質感；當打開道路或分區筆刷時，網格於 0.25 秒內自然浮現高亮，兼具極致視覺純淨度與精準建築吸附體驗。
+
+#### 48.3 大氣天幕、日月天體與 24 小時晝夜全週期光影 (`EnvironmentManager.ts`)
+- **Procedural Sky Dome Shader**：
+  - 半徑 760m 之內翻天球幾何體，由自訂 GLSL 著色器動態插值天頂色（`uTopColor`）與地平線色（`uBottomColor`）：
+    $$h = \text{normalize}(\mathbf{P}_{\text{world}} + [0, u_{\text{offset}}, 0])_y$$
+    $$\text{factor} = \max\left(\max(h, 0.0)^{u_{\text{exponent}}}, 0.0\right)$$
+    $$\mathbf{C}_{\text{sky}} = \text{mix}(\mathbf{C}_{\text{bottom}}, \mathbf{C}_{\text{top}}, \text{factor})$$
+- **天體軌道與陰影方向控制**：
+  - 時間參數 $T = \text{hour} + \text{minute} / 60.0$ ($0.0 \sim 24.0$)。
+  - 太陽軌道角 $\theta_{\text{sun}} = \frac{T - 6.0}{12.0} \pi$；月球軌道角 $\theta_{\text{moon}} = \theta_{\text{sun}} + \pi$。
+  - 太陽光向量：
+    $$\mathbf{D}_{\text{sun}} = \text{normalize}\left(\left[\cos\theta_{\text{sun}}, \sin\theta_{\text{sun}} \times 0.78, 0.35\sin(0.5\theta_{\text{sun}})\right]\right)$$
+  - 太陽光照強度於正午達 $1.45$，日落時平滑過渡至 $0.0$；月光於夜間提供 $0.44$ 柔和冷色（`0x93c5fd`）光照，保證城區細節於夜間清晰可辨。
+- **無縫大氣霧氣色彩同步 (Seamless Horizon Fog Matching)**：
+  - 場景霧氣 `scene.fog.color` 每幀精確拷貝地平線色彩（`uBottomColor`），消除任何遠處地貌與天空交界處之切割痕跡。
+
+#### 48.4 遠景自然山脈與動態海面 (Mountains & Dynamic Ocean Waves)
+- **空間 Hash 映射接縫防裂山峰演算法 (`createSingleMountain`)**：
+  - 在圓錐幾何體頂點擾動時，若對共點或相鄰點隨機取值，將導致圓錐側面縫隙撕裂。
+  - 導入空間座標 Hash 雜湊表（`key = [round(x*10), round(y*10), round(z*10)]`）：共用座標頂點共享完全相同之擾動向量 $(\Delta x, \Delta z)$，徹底消除山體接縫穿孔。
+  - 頂點高度色彩漸層：
+    - 海拔比率 $r < 0.35$：山腳海島綠林（`#2d5a3f`）向山腰青灰岩層（`#526070`）過渡。
+    - 海拔比率 $0.35 \le r \le 0.72$：青灰岩層向山巔積雪（`#f1f5f9`）過渡。
+    - 海拔比率 $r > 0.72$：純白低多邊形雪峰積雪。
+- **複合正弦動態低多邊形海面 (`updateOceanWaves`)**：
+  - 1400x1400m 海平面在基準面 $Y = -0.78\text{m}$ 上，每幀根據三組非諧波正弦函數更新頂點：
+    $$\Delta y = 0.10\sin(0.04x + 1.1t) + 0.10\cos(0.04z + 0.85t) + 0.05\sin(0.025(x+z) + 1.4t)$$
+  - 頂點波浪最大垂直位移僅 $\pm 0.25\text{m}$，波峰最高到達 $Y = -0.53\text{m}$，完全低於沙灘下緣（$-0.40\text{m}$），絕對杜絕海水倒灌漫入平原地表。
+- **海岸浪花白沫框 (Tidal Foam Frame)**：
+  - 以 `THREE.Shape` 與 `THREE.Path` 挖孔生成外框 $126\text{m}$、內孔 $119.5\text{m}$ 之正方形浪花白沫面，緊貼 240m 崖壁水線，配合潮汐週期進行大小與透明度呼吸動態。
+
+
+---
+
+### 四十九、 市民靜態資料清單、車輛使用登記與全城共用狀態機基礎架構 (Round 56)
+
+#### 49.1 市民靜態與狀態資料統一結構 (`src/types/citizen.ts`)
+- **整合單一事實來源**：移除原先 `BuildingManager.ts` 與 `src/types/citizen.ts` 雙邊重疊且未串接之定義，統一由 `src/types/citizen.ts` 匯出並於 `BuildingManager.ts` 再匯出以保持相容。
+- **`CitizenActivityState` 完整狀態列舉**：
+  `'MovingIn' | 'AtHome' | 'Sleeping' | 'Traveling' | 'CommutingToWork' | 'AtWork' | 'CommutingToLeisure' | 'Leisure' | 'CommutingToHome'`。
+- **新增關鍵欄位**：
+  1. `atHome: boolean`（對應 `AT_home` 狀態）：嚴格僅於市民到達住家且 3D 模型移除後為 `true`。
+  2. `hasVisibleModel: boolean`：追蹤市民目前在 3D 場景內是否有尚存之行人模型。
+  3. `currentLocationBuildingId?: EntityId`：記錄市民位於屋內或廠內時之所在建築 ID（移動期間為 `undefined`）。
+  4. `vehicleRegistration: CitizenVehicleRegistration`：出行車輛使用登記（含 `isUsingVehicle`、`vehicleId`、`ownerBuildingId`、`travelMode`、`checkedOutAt`），並同步維護 `currentVehicleId` / `currentTravelMode`。
+
+#### 49.2 全城共用一份狀態機架構 (`src/simulation/CitizenStateMachine.ts`)
+- **享元式無狀態處理器查表 (`CITIZEN_STATE_MACHINE`)**：
+  - 每個狀態對應一組標準介面 `CitizenStateHandler`（`onEnter`、`onExit`、`onEvent`、`onTick`），全城共用唯一一份定義表，無個別市民物件記憶體開銷。
+  - 目前僅建立各狀態插槽與不變量守門邏輯，不預先編寫任何未討論之日程排程或自主決策規則。
+- **嚴格 `AT_home` 狀態轉移守門 (`AtHome.onEnter` & `transitionTo`)**：
+  - `transitionTo(citizen, 'AtHome')` 與 `AtHome.onEnter` 雙重檢核 `citizen.hasVisibleModel`：若 3D 模型尚未自場景清除（`hasVisibleModel === true`），強制維持 `atHome = false` 並拒絕轉入 `'AtHome'`。
+  - 離開 `'AtHome'`（`onExit`）或進入其他移動／工作狀態時，一律強制重設 `atHome = false` 與 `currentLocationBuildingId = undefined`。
+- **模型顯隱與車輛登記輔助介面**：
+  - `markModelSpawned(citizen)` / `markModelDespawned(citizen)`
+  - `registerVehicleUsage(...)` / `registerNonVehicleTravel(...)` / `clearVehicleUsage(...)`
+
+#### 49.3 `BuildingManager` 遷入與通行流程接入 (`src/systems/BuildingManager.ts`)
+- **遷入流程時序修正 (`dispatchCitizenVehicle` & `update`)**：
+  1. 車輛抵達停妥時生成居民資料，初始狀態為 `currentActivity: 'MovingIn'`、`atHome: false`，不再於停車瞬間累加 `building.currentOccupants`。
+  2. 行人模型下車生成（`isAlighted = true`）時呼叫 `CitizenStateMachine.markModelSpawned(ped.profile)`。
+  3. 步行抵達大門口後，先由 `pedestrianContainer` 移除網格並呼叫 `CitizenStateMachine.markModelDespawned(ped.profile)`，最後才於 `onArrivedDestination` 執行 `CitizenStateMachine.transitionTo(res, 'AtHome')` 並遞增 `building.currentOccupants += 1`。
+- **出行、返家與召回接軌**：
+  - `decideCitizenTravel`、`testRandomCitizenCommute`、`returnCitizenToResidence` 與 `recallAllCitizensToResidence` 統一透過 `CitizenStateMachine` 檢查 `atHome`、切換狀態、標記模型移除與更新 `vehicleRegistration`。
+
+
+---
+
+### 五十、 低密度工業區狀態清單列表與共用狀態機架構 (Round 57)
+
+#### 50.1 低密度工業區狀態資料定義 (`src/types/industrial.ts`)
+- 定義狀態列舉 `IndustrialLowState`：`'Constructing' | 'Idle' | 'Operating' | 'Paused' | 'Abandoned'`。
+- 定義每棟低密度工業建築持有的靜態／動態狀態資料 `IndustrialLowProfile`：
+  - 識別與狀態：`buildingId`、`modelId`、`name`、`state`
+  - 9 項核心營運欄位：`funds`、`rawMaterialType`、`rawMaterialAmount`、`productType`、`productAmount`、`maxWorkers`、`workerCount`、`insideWorkerCount`、`insideTruckCount`（預設 `1`）。
+
+#### 50.2 全城共用低密度工業區狀態機 (`src/simulation/IndustrialStateMachine.ts`)
+- **共享查表定義 (`INDUSTRIAL_LOW_STATE_MACHINE`)**：
+  - 採用與 `CitizenStateMachine` 一致的享元架構，每個狀態提供 `onEnter`、`onExit`、`onEvent`、`onTick` 四個標準插槽，不預先填入複雜營運公式。
+- **調度器 (`IndustrialStateMachine`)**：
+  - `createDefaultProfile(...)`：建築起建時生成預設 9 欄位清單（`insideTruckCount = 1`）。
+  - `transitionTo(factory, nextState, context)`、`dispatchEvent(factory, event, context)`、`tick(factory, deltaTime, context)`。
+  - `syncWorkerCounts(factory, workerCount, insideWorkerCount)`：同步入職員工數與廠內人數。
+
+#### 50.3 `BuildingManager` 清單登錄與 UI 同步 (`src/systems/BuildingManager.ts`, `src/ui/DevMenu.ts`)
+- `BuildingManager` 新增 `industrialStatusList: IndustrialLowProfile[]` 清單與公開查詢介面 `getIndustrialStatusList()`、`getIndustrialProfile(buildingId)`。
+- `spawnBuilding` 於 `metadata.category === 'Industrial_Low'` 時自動建立並註冊 `IndustrialLowProfile`（初始為 `'Constructing'`）；`buildIndustrialBuilding` 完工與 `completeConstruction` 時透過 `IndustrialStateMachine.transitionTo(..., 'Idle')` 切換為待命狀態。
+- `testRandomCitizenCommute` 與 `recallAllCitizensToResidence` 同步更新目標工廠的 `workerCount` 與 `insideWorkerCount`。
+- 工業建築懸停 Tooltip 與 `DevMenu` 工業清單同步展示狀態機狀態與 9 項清單欄位。
+
+
+---
+
+### 五十一、 建築密度分級擴充與住宅區共用狀態機架構 (Round 58)
+
+#### 51.1 共用建築密度分級與工業區清單擴充 (`src/types/common.ts`, `src/types/industrial.ts`, `src/simulation/IndustrialStateMachine.ts`)
+- 新增 `BuildingDensityLevel = 'Low' | 'Medium' | 'High'`。
+- `IndustrialLowProfile`（別名 `IndustrialProfile`）新增 `density: BuildingDensityLevel`，`IndustrialStateMachine.createDefaultProfile` 支援傳入密度參數（預設 `'Low'`），為未來跨密度工業共用狀態機預留判斷基準。
+
+#### 51.2 住宅區狀態清單與全城共用狀態機 (`src/types/residential.ts`, `src/simulation/ResidentialStateMachine.ts`)
+- 定義 `ResidentialState`：`'Constructing' | 'WaitingForRoad' | 'MovingIn' | 'Active' | 'Abandoned'`。
+- 定義 `ResidentialProfile`（別名 `ResidentialLowProfile`），包含建築識別、密度分級 `density`、狀態機狀態 `state`、資產與等級（`funds`、`level`）、居住統計（`maxResidents`、`registeredResidents`、`insideResidentCount`、`isCoLiving`）與名下車輛統計（`vehicleCount`、`availableVehicleCount`）。
+- 建立 `RESIDENTIAL_STATE_MACHINE` 與 `ResidentialStateMachine`（`createDefaultProfile`、`transitionTo`、`dispatchEvent`、`tick`、`syncCounts`）。
+
+#### 51.3 `BuildingManager` 住宅生命週期整合 (`src/systems/BuildingManager.ts`, `src/ui/DevMenu.ts`)
+- `BuildingManager` 新增 `residentialStatusList` 列表與 `getResidentialStatusList()`、`getResidentialProfile(buildingId)` 查詢介面。
+- 施工起建（`'Constructing'`）→ 無聯外道路（`'WaitingForRoad'`）→ 派車遷入（`'MovingIn'`）→ 首位市民入屋模型消失（`'Active'`），全程與 `syncResidentialProfileCounts` 保持即時同步，並同步更新 `DevMenu` 與 Tooltip 顯示。
+
+
+---
+
+### 五十二、 系統解耦重構：PedestrianManager、CitizenManager、TrafficDispatchHelper 與舊代碼清理 (Round 59)
+
+#### 52.1 行人系統獨立與雙向依賴解除 (`src/simulation/PedestrianManager.ts`, `src/simulation/VehicleManager.ts`)
+- **新增 `PedestrianManager`**：完全對稱於 `VehicleManager`，統一託管 `PedestrianContainer`、行人生成/延遲下車、紅綠燈停等與斑馬線穿越、動畫更新、進屋銷毀與 `CitizenStateMachine.markModelDespawned`。
+- **切斷 `VehicleManager ↔ BuildingManager` 雙向耦合**：移除 `VehicleManager.setBuildingManager`，改為 `VehicleManager.setPedestrianManager(pedestrianManager)`，轉彎讓行與前方行人偵測直接向 `PedestrianManager` 查詢。
+- **消除 `VehicleManager` 重複生成邏輯**：抽出私有 `createActiveVehicle(...)` 共用核心，供 `spawnTestVehicle` 與 `spawnMovingInVehicle` 共同使用。
+
+#### 52.2 市民與交通幾何調度抽離 (`src/simulation/CitizenManager.ts`, `src/simulation/TrafficDispatchHelper.ts`)
+- **新增 `CitizenManager`**：
+  - 維護全城 `citizens: Map<string, CitizenProfile>`，$O(1)$ 查詢任意市民檔案。
+  - 抽出統一借車 (`checkoutVehicle`) 與還車 (`returnVehicleToHome`) 操作，整併 `decideCitizenTravel`、`returnCitizenToResidence`、`testRandomCitizenCommute` 與 `recallAllCitizensToResidence`。
+- **新增 `TrafficDispatchHelper`**：
+  - 抽離 `findBestRoadPath`、`attachCurbsideDeparture`、`attachCurbsideArrival` 與直達備援路徑，並抽出共用 `directionToVector` 與 `rebuildPathFromRouteWaypoints`。
+
+#### 52.3 實質建築型別統一與過時死碼清理 (`src/types/building.ts`, `src/ui/BuildingTooltip.ts`, `src/systems/BuildingManager.ts`)
+- 刪除未使用的早期殭屍型別檔 `src/types/road.ts`、`src/types/vehicle.ts`，並以實際運行的 `PlacedBuilding`、`ResidenceVehicle`、`HousingDemand`、`TravelDecisionResult` 等介面重構 `src/types/building.ts`，徹底消除與 `RoadNetwork` / `ZoningManager` / `Pathfinding` 的重名衝突。
+- 移除重複的 `HousingDensity` 與 `PlacedBuilding.moveInStatus`（改以 `BuildingDensityLevel` 及 `residentialProfile.state` 單一來源判斷）。
+- 將懸停 HTML 拼裝抽出至 `src/ui/BuildingTooltip.ts`，`BuildingManager` 保留向後相容的公開轉發方法，總行數由 3,366 行精簡至約 2,000 行內並聚焦於建築媒合與施工生命週期。
+
+
+
+---
+
+### 五十三、 市民任務列隊、累計虛擬分鐘時鐘與週期性「找工作」媒合系統 (Round 60)
+
+#### 53.1 累計虛擬總分鐘時鐘 (`src/simulation/TimeManager.ts`)
+- 新增私有累計器 `totalVirtualMinutes: number = 0`，於 `TimeManager.update(deltaTime)` 每次依 `deltaTime * timeScale * VIRTUAL_MINUTES_PER_SIM_SEC`（1 模擬秒 = 6 虛擬分鐘）累加，並公開 [`getTotalVirtualMinutes(): number`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/TimeManager.ts) 供全城共用，保證任務的 `createdAtVirtualMin` 與 `latestAcceptVirtualMin` 具備單調一致的時間基準。
+
+#### 53.2 市民任務列隊型別與雙階段狀態機 (`src/types/citizen.ts`, `src/simulation/CitizenStateMachine.ts`)
+- **型別定義 (`src/types/citizen.ts`)**：
+  - 新增 `CitizenTaskType`（`'FIND_JOB'`）與 `CitizenTaskItem`（`id`、`type`、`priority`、`createdAtVirtualMin`、`latestAcceptVirtualMin`、`payload`）。
+  - [`CitizenProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts) 新增 `taskQueue: CitizenTaskItem[]`。
+- **享元規則表與雙階段調度 (`src/simulation/CitizenStateMachine.ts`)**：
+  - 定義 `CitizenTaskRule` 與 `CITIZEN_TASK_RULES`，各任務類型註冊 `defaultPriority`、`defaultValidDurationMin`、`canEnqueue`、`canExecute`、`execute`。
+  - **`enqueueTask`**：通用防重複檢查（已存在同 `type` 則拒絕）+ 優先度限制於 `1..100` + `canEnqueue` 驗證，加入後依優先度降冪排序（同分保留建立順序）。
+  - **`processTaskQueue`**：先過濾與移除過期（`isTaskExpired`: `latestAcceptVirtualMin !== null && currentVirtualMin > latestAcceptVirtualMin`）或 `canExecute` 失敗之任務；再將通過篩選的任務快照依高到低優先度逐一透過 `dispatchEvent(citizen, { type: 'EXECUTE_TASK', task, currentVirtualMin, context })` 執行。
+    - 執行回傳 `true`（成功）：自 `taskQueue` 移除該任務。
+    - 執行回傳 `false`（執行失敗，如無空缺或路斷）：保留於 `taskQueue` 等待下一輪篩選，同時以「單輪快照逐筆執行」確保失敗任務不會在同一輪內無限重試。
+  - **`FIND_JOB` 規則配置**：`defaultPriority = 50`、`defaultValidDurationMin = 190`；`canEnqueue` 檢查 `age >= 18 && !workBuildingId`；`canExecute` 再次檢查 `age >= 18 && !workBuildingId`（不檢查 `atHome`）。
+
+#### 53.3 每 10 虛擬分鐘週期檢查與步行可達工廠媒合 (`src/simulation/CitizenManager.ts`, `src/systems/BuildingManager.ts`, `src/main.ts`)
+- **`CitizenManager.stepPeriodicSimulation(currentVirtualMin, buildings)`**：
+  - 以 `lastCheckVirtualMin` 追蹤上次檢查時刻，每累計 `10` 虛擬分鐘推進一次週期檢查（支援高速倍速下之 `while (currentVirtualMin - lastCheckVirtualMin >= 10)` 補齊檢查次數）。
+  - 每次檢查遞增 `periodicCheckCount`；當 `periodicCheckCount % 10 === 0`（全城同步每 10 次 / 每 100 虛擬分鐘）時，對全體市民呼叫 `CitizenStateMachine.enqueueTask(citizen, 'FIND_JOB', currentVirtualMin)`。
+  - 對每位市民執行 `CitizenStateMachine.processTaskQueue`，由 `tryAssignNearestReachableJob` 尋找最近且具步行路徑之工廠。
+- **市民端找工作核心 (`tryAssignNearestReachableJob`)**：
+  - 過濾條件：工業建築、`constructingProgress >= 1`、`state` 為 `'Idle'` 或 `'Operating'`、職缺未滿（`employedWorkerIds.length < metadata.capacity`）。
+  - 距離排序：計算 `homeBuilding.worldCenter.distanceToSquared(factory.worldCenter)` 由近而遠排序。
+  - 路徑可達性檢核：依序呼叫 [`PedestrianNetwork.findPathBetweenBuildings(homeBuilding, factory)`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/PedestrianNetwork.ts)，確認存在至少一條步行路徑後立即錄取，寫入 `citizen.workBuildingId = factory.id`、`factory.employedWorkerIds.push(citizen.id)`、同步 [`IndustrialStateMachine.syncWorkerCounts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/IndustrialStateMachine.ts) 並派發 `WORKER_HIRED` 事件。
+- **主循環串接與 UI 清理 (`src/main.ts`, `src/ui/DevMenu.ts`, `src/ui/BuildingTooltip.ts`)**：
+  - `main.ts` 於非暫停狀態推進 `buildingManager.stepCitizenPeriodicSimulation(timeManager.getTotalVirtualMinutes())`。
+  - 徹底移除 `#dev-commute-test-btn`、`#dev-commute-return-btn`、`#dev-commute-log` 與 `testRandomCitizenCommute`，並於 `DevMenu` 顯示 `#dev-citizen-check-badge` 與每位市民的就業／排隊狀態，`BuildingTooltip` 同步顯示任職工廠名稱或待業／找工作中標籤。

@@ -2399,3 +2399,205 @@
     - **Test 7（多車道轉向出發動線保留）**：驗證西側路緣起步後經過轉向路口（X=-1）之沿途節點 100% 完整保留。
   - 執行 `cmd /c "npm run build"`，TypeScript 編譯與 Vite 打包 0 錯誤通過。
   - **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 提交**。
+
+---
+
+## [2026-11-11] 第 55 輪進度更新：自然山脈海灣平原美術升級（立體地基沙盤、智慧點陣網格、遠景山海與 24 小時晝夜光影大氣）
+
+### 本輪更新重點
+- **Git 前置作業**：
+  - 依指示於動工前建立 GIT 穩定版本（Commit `7ef8cb7`）並推送上傳至 GitHub `origin/main`（同時將 `scratch/` 加入 `.gitignore`）。
+- **美術風格確立**：
+  - 依討論定案採用「**風格 C：自然山脈 / 海灣平原 (Natural Mountains & Coastal Basin)**」。
+- **核心實作內容**：
+  1. **3D 立體海島沙盤與智慧點陣網格 ([`src/rendering/TerrainRenderer.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/TerrainRenderer.ts))**：
+     - 將單層平面升級為立體微縮沙盤底盤：
+       - `200x200m` 綠意草地平原（頂面位於 `Y = -0.02m`，套用程序化自然草叢肌理貼圖 `createGrassTexture`）。
+       - `200~232m` 金色沙灘過渡階梯（頂面位於 `Y = -0.15m`，套用沙粒紋理貼圖 `createSandTexture`）。
+       - `232~240m` 岩石斷崖底座（厚 4.6m 下切至水底 `Y = -5.0m`）。
+     - 捨棄生硬 `GridHelper` 線框，導入 `512x512` 程序化繪製之**智慧點陣網格 (Dot Matrix Grid)**（2m 柔和白點 + 10m 水藍十字星標記）。
+     - 實作 `setGridActive(active)` 與阻尼透明度插值（`update`）：平時極淡隱蔽（`opacity: 0.08`），進入建造或分區模式時平滑淡入至 `0.85`。
+  2. **自然山脈、動態海面、大氣天幕與 24 小時晝夜系統 ([`src/rendering/EnvironmentManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/rendering/EnvironmentManager.ts))**：
+     - **漸層大氣天球 (Sky Dome Shader)**：自訂頂點/片元著色器渲染天頂至地平線之自然散射漸變。
+     - **日月星辰與浮雲**：生成低多邊形太陽、月亮、450 顆夜間旋轉星點，以及 18 朵緩緩隨風飄動並循環環繞的立體低多邊形白雲。
+     - **遠景低多邊形山脈環**：環繞外圍生成 38 座自然高低起伏的山峰（採空間 Hash 座標接縫防裂技術），具海拔漸層頂點色（綠林 $\to$ 青灰山岩 $\to$ 皚皚白雪），並預留雙海灣視野峽口。
+     - **動態海灣海面與海岸浪花**：1400x1400m 低多邊形海平面（`60x60` 網格）每幀進行三組正弦波浪動畫與法線更新；緊貼 240m 崖邊配置隨潮汐呼吸之白色浪花泡沫框，並於沙灘環帶配置 72 株低多邊形針葉松樹與海岸礁石。
+     - **24 小時晝夜光影循環**：串接 `TimeManager` 虛擬世界時間，自動推進日出晨曦、正午日光、紫橙晚霞、深邃星夜，太陽方向光與月光隨軌道旋轉，並與霧氣色溫 (`FogExp2`) 100% 同步融合。
+  3. **建造模式聯動與主循環掛載 ([`src/ui/BuildMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other\City_Dome\src\ui\BuildMenu.ts), [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts))**：
+     - `BuildMenu` 新增 `onBuildModeChange` 事件機制，於道路鋪設或土地分區啟動/關閉時即時通知網格切換。
+     - `main.ts` 替換靜態照明為 `EnvironmentManager` 與 `TerrainRenderer`，於前景繪圖循環持續驅動大氣、波浪、雲朵與網格淡入淡出。
+- **驗證結果**：
+  - 執行 `scratch/test_environment_simulation.ts`：驗證 24 小時全時段光影色溫、網格淡入淡出與幾何建構全數通過。
+  - 執行 `scratch/test_lane_parking_commute.ts`：7 大交通與通勤回歸測試 100% 通過。
+  - 執行 `npm run build`：TypeScript 編譯與 Vite 打包 0 報錯通過。
+  - **Git 遵循**：嚴格遵守指示，**完成後未建立新 GIT 版本**。
+
+
+---
+
+## [2026-11-12] 第 56 輪作業：市民狀態機基礎架構建置（靜態資料＋車輛登記、嚴格 AT_home 條件與共用狀態機骨架）
+
+### 本輪更新摘要
+- **目標**：啟動市民狀態機架構開發第一階段，在不預先寫入自主排程或決策規則的前提下，完成資料模型統一、車輛使用登記、`AT_home` 嚴格進屋消失條件與全城共用狀態機定義骨架。
+- **實作內容**：
+  1. **市民靜態與狀態資料統一（[`src/types/citizen.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)）**：
+     - 整合原 `BuildingManager.ts` 與 `src/types/citizen.ts` 之市民型別定義為單一來源 [`CitizenProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)。
+     - 新增 `atHome`（嚴格 `AT_home` 布林狀態）、`hasVisibleModel`（3D 模型在場標記）、`currentLocationBuildingId`，並新增 `vehicleRegistration`（[`CitizenVehicleRegistration`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)）記錄出行車輛借出與歸還狀態。
+  2. **全城共用一份狀態機定義骨架（[`src/simulation/CitizenStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenStateMachine.ts)）**：
+     - 建立無狀態之共享狀態處理器查表 `CITIZEN_STATE_MACHINE` 與調度器 `CitizenStateMachine`（含 `transitionTo`、`dispatchEvent`、`tick` 插槽及車輛登記/模型顯隱標記方法）。
+     - 依指示未預先寫入日程觸發或自主決策規則，僅實作狀態不變量與 `AtHome` 模型消失守門驗證。
+  3. **嚴格 `AT_home` 條件接入與 UI 同步（[`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)、[`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)）**：
+     - 修正住宅遷入流程：車子停妥生成居民時改為 `'MovingIn'`（`atHome = false`），不再提前計入 `currentOccupants`；必須等市民步行走進大門且 3D 模型自場景移除後，才經由狀態機轉移至 `'AtHome'`（`atHome = true`）並增加 `currentOccupants`。
+     - 更新出行、返家與召回流程，同步維護 `vehicleRegistration`、`hasVisibleModel` 與 `atHome`，並更新 Tooltip 與開發者面板狀態顯示文字。
+
+### 本輪異動檔案清單
+1. `src/types/citizen.ts`（修改）：統一市民靜態/狀態資料介面與新增出行車輛使用登記結構。
+2. `src/simulation/CitizenStateMachine.ts`（新增）：全城共用一份市民狀態機定義架構骨架與調度器。
+3. `src/systems/BuildingManager.ts`（修改）：接入 `CitizenProfile` 與 `CitizenStateMachine`，嚴格落實 `AT_home` 到家且模型消失轉移邏輯與車輛登記。
+4. `src/ui/DevMenu.ts`（修改）：同步支援 `'MovingIn'` 與 `r.atHome` 顯示。
+5. `scratch/test_citizen_state_machine.ts`（新增測試腳本）：驗證 `AT_home` 守門、車輛登記生命週期與 `BuildingManager` 遷入返家整合流程。
+6. `MarkDown/Dissusion_withDEV.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Agent_dev_log.md`（更新）：記錄本輪討論結論、技術細節與更新進度。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`（`tsc && vite build`），TypeScript 嚴格編譯 0 錯誤、Vite 打包通過。
+- **市民狀態機與 `AT_home` 驗證**：執行 `npx.cmd tsx scratch/test_citizen_state_machine.ts`，4 項測試全數通過。
+- **既有人車通勤回歸測試**：執行 `npx.cmd tsx scratch/test_lane_parking_commute.ts`，7 項整合測試全數通過。
+- **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 版本**。
+
+
+---
+
+## [2026-11-12] 第 57 輪作業：低密度工業區狀態清單列表與共用狀態機架構建置
+
+### 本輪更新摘要
+- **目標**：建立每棟低密度工業區建築出現時自動生成的 9 欄位狀態清單列表，並構建全城共用一份的低密度工業區狀態機架構（僅完成骨架與清單同步，不預寫過多業務規則）。
+- **實作內容**：
+  1. **新增低密度工業區型別（[`src/types/industrial.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/industrial.ts)、[`src/types/index.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/index.ts)）**：
+     - 定義 `IndustrialLowState` 與 `IndustrialLowProfile`（包含工廠資金、原物料種類與數量、產品種類與數量、最大員工數、員工數、工廠內員工數、工廠內貨車數預設 1）。
+  2. **新增共用低密度工業區狀態機（[`src/simulation/IndustrialStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/IndustrialStateMachine.ts)）**：
+     - 建立 `INDUSTRIAL_LOW_STATE_MACHINE` 查表與 `IndustrialStateMachine` 調度器，包含 `createDefaultProfile`、`transitionTo`、`dispatchEvent`、`tick`、`syncWorkerCounts`。
+  3. **建築出現自動生成清單與員工同步（[`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)、[`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)）**：
+     - 在 `spawnBuilding` 建立低密度工業建築時自動生成並註冊進 `industrialStatusList`，完工後轉移為 `'Idle'`。
+     - 市民入職、抵達工廠與召回時同步更新 `workerCount` 與 `insideWorkerCount`，並於工業建築 Tooltip 與開發者面板呈現。
+
+### 本輪異動檔案清單
+1. `src/types/industrial.ts`（新增）：低密度工業區狀態列舉與 9 欄位清單介面。
+2. `src/types/index.ts`（修改）：匯出 `industrial` 型別模組。
+3. `src/simulation/IndustrialStateMachine.ts`（新增）：全城共用一份低密度工業區狀態機架構。
+4. `src/systems/BuildingManager.ts`（修改）：工業建築生成自動登錄清單、完工狀態轉移、人員同步與 Tooltip 顯示。
+5. `src/ui/DevMenu.ts`（修改）：工業清單顯示狀態機狀態與 9 欄位摘要。
+6. `scratch/test_industrial_state_machine.ts`（新增測試腳本）：驗證共用狀態機、預設 9 欄位（含預設貨車數 1）與 `BuildingManager` 清單自動登錄。
+7. `MarkDown/Dissusion_withDEV.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Agent_dev_log.md`（更新）：記錄本輪討論結論、技術細節與更新進度。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`（`tsc && vite build`），TypeScript 嚴格編譯 0 錯誤、Vite 打包通過。
+- **工業區狀態機與清單測試**：執行 `npx.cmd tsx scratch/test_industrial_state_machine.ts`，全數通過。
+- **市民狀態機與通勤回歸測試**：執行 `npx.cmd tsx scratch/test_citizen_state_machine.ts` 與 `npx.cmd tsx scratch/test_lane_parking_commute.ts`，全數通過。
+- **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 版本**。
+
+
+---
+
+## [2026-11-12] 第 58 輪作業：工業區密度分級擴充與住宅區狀態清單／共用狀態機建置
+
+### 本輪更新摘要
+- **目標**：為工業區狀態清單補上密度分級欄位以利跨密度共用同一套狀態機，並同步建置低密度住宅區狀態清單與全城共用住宅狀態機架構。
+- **實作內容**：
+  1. **共用密度分級與工業區擴充（[`src/types/common.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/common.ts)、[`src/types/industrial.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/industrial.ts)、[`src/simulation/IndustrialStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/IndustrialStateMachine.ts)）**：
+     - 新增 `BuildingDensityLevel`（`'Low' | 'Medium' | 'High'`）供工業與住宅共同使用；工業區清單新增 `density` 欄位，低密度工業建築生成時自動登錄 `'Low'`。
+  2. **住宅區狀態清單與共用狀態機（[`src/types/residential.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/residential.ts)、[`src/simulation/ResidentialStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/ResidentialStateMachine.ts)）**：
+     - 定義 `ResidentialState`、`ResidentialProfile` 及全城共用之 `RESIDENTIAL_STATE_MACHINE` / `ResidentialStateMachine`。
+  3. **`BuildingManager` 與 UI 接軌（[`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)、[`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)）**：
+     - 低密度住宅建築出現時自動產生並登錄 `residentialStatusList`，並依建築施工、缺路等待、遷入與正式入住流程推進狀態機，出行與返家同步更新屋內人數與可用車輛數。
+
+### 本輪異動檔案清單
+1. `src/types/common.ts`（修改）：新增 `BuildingDensityLevel`。
+2. `src/types/industrial.ts`、`src/simulation/IndustrialStateMachine.ts`（修改）：新增 `density` 密度分級欄位並調整為跨密度共用架構。
+3. `src/types/residential.ts`（新增）：住宅區狀態列舉與狀態清單結構。
+4. `src/types/index.ts`（修改）：匯出 `residential` 模組。
+5. `src/simulation/ResidentialStateMachine.ts`（新增）：全城共用一份住宅區狀態機定義與調度器。
+6. `src/systems/BuildingManager.ts`、`src/ui/DevMenu.ts`（修改）：整合住宅區狀態清單、生命週期狀態轉移、數據同步與面板顯示。
+7. `scratch/test_residential_state_machine.ts`（新增測試腳本）、`scratch/test_industrial_state_machine.ts`（更新）：驗證住宅與工業共用狀態機與清單同步。
+8. `MarkDown/Dissusion_withDEV.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Agent_dev_log.md`（更新）：登錄本輪討論結論、技術細節與更新進度。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`（`tsc && vite build`），0 錯誤通過。
+- **全套自動化測試**：`scratch/test_residential_state_machine.ts`、`scratch/test_industrial_state_machine.ts`、`scratch/test_citizen_state_machine.ts`、`scratch/test_lane_parking_commute.ts` 全數通過。
+- **Git 遵循**：嚴格遵循指示，**不建立任何 GIT 版本**。
+
+
+---
+
+## [2026-11-12] 第 59 輪作業：全專案架構整併、PedestrianManager / CitizenManager 獨立與舊代碼清理
+
+### 本輪更新摘要
+- **目標**：解決全面盤點發現的舊架構多餘型別、重複欄位與 `BuildingManager` 職責過重問題，將行人模擬獨立為 `PedestrianManager`（對稱 `VehicleManager`）、市民邏輯獨立為 `CitizenManager`、交通路邊對接抽離為 `TrafficDispatchHelper`、Tooltip 抽離為 `BuildingTooltip`。
+- **實作內容**：
+  1. **新增 [`src/simulation/PedestrianManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/PedestrianManager.ts)**，並修改 [`src/simulation/VehicleManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/VehicleManager.ts) 解除對 `BuildingManager` 的反向依賴、消除測試/業務車輛生成重複代碼。
+  2. **新增 [`src/simulation/CitizenManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts)** 與 **[`src/simulation/TrafficDispatchHelper.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/TrafficDispatchHelper.ts)**。
+  3. **新增 [`src/ui/BuildingTooltip.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildingTooltip.ts)**，將 Tooltip DOM 與 HTML 渲染自 `BuildingManager` 抽離。
+  4. **清理舊型別與重複欄位**：移除未使用的 `src/types/road.ts`、`src/types/vehicle.ts` 及 `mapOverlay.ts` 死碼，重構 [`src/types/building.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/building.ts) 作為實質共用建築型別來源；移除 `HousingDensity` 與 `moveInStatus` 重複欄位。
+  5. **更新 [`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts) 與 [`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)**：於主模擬迴圈獨立推進 `pedestrianManager.update`，並保留既有對外介面相容轉發。
+
+### 本輪異動檔案清單
+1. `src/simulation/PedestrianManager.ts`（新增）：獨立行人移動與斑馬線模擬管理器。
+2. `src/simulation/CitizenManager.ts`（新增）：全城市民註冊表、出行決策、通勤、返家與召回管理器。
+3. `src/simulation/TrafficDispatchHelper.ts`（新增）：共用道路尋路與路邊起步／泊車幾何工具。
+4. `src/ui/BuildingTooltip.ts`（新增）：建築懸停資訊卡片元件。
+5. `src/types/building.ts`、`src/types/mapOverlay.ts`、`src/types/index.ts`（重構／精簡），並刪除未使用之 `src/types/road.ts`、`src/types/vehicle.ts`。
+6. `src/simulation/VehicleManager.ts`、`src/systems/BuildingManager.ts`、`src/main.ts`（修改）：完成模組拆分對接與循環依賴解除。
+7. `scratch/test_pedestrian_citizen_managers.ts`（新增測試）：驗證 `PedestrianManager`、`CitizenManager` 獨立運行、斑馬線偵測與通勤召回全流程。
+8. `MarkDown/Dissusion_withDEV.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Agent_dev_log.md`（更新）：登錄本輪重構紀錄。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`（`tsc && vite build`），0 錯誤通過。
+- **全套自動化測試（6 支腳本全數通過）**：
+  - `scratch/test_pedestrian_citizen_managers.ts` 通過
+  - `scratch/test_residential_state_machine.ts` 通過
+  - `scratch/test_industrial_state_machine.ts` 通過
+  - `scratch/test_citizen_state_machine.ts` 通過
+  - `scratch/test_lane_parking_commute.ts` 通過
+  - `scratch/test_environment_simulation.ts` 通過
+- **Git 遵循**：嚴格遵循指示，**不建立任何版本**。
+
+
+
+---
+
+## [2026-11-12] 第 60 輪作業：市民任務列隊架構、累計虛擬時鐘、每 10 分鐘全體週期檢查與找工作媒合
+
+### 本輪更新摘要
+- **目標**：實作以「加入條件／執行條件＋過期時間／失敗保留」為核心的市民任務列隊系統，建立 `TimeManager` 累計虛擬總分鐘時鐘，實現每 10 虛擬分鐘全體市民檢查、每 10 次全城同步加入 `'FIND_JOB'` 並媒合最近且步行可達之空缺工廠，同時徹底移除測試上班按鈕。
+- **實作內容**：
+  1. **統一虛擬總分鐘時鐘（[`src/simulation/TimeManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/TimeManager.ts)）**：新增 `totalVirtualMinutes` 與 `getTotalVirtualMinutes()`，作為任務建立時間與過期時間（+190 虛擬分鐘）之精準共同基準。
+  2. **任務列隊資料與雙階段狀態機（[`src/types/citizen.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)、[`src/simulation/CitizenStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenStateMachine.ts)）**：
+     - 擴充 `CitizenProfile.taskQueue`，實作通用任務規則註冊表 `CITIZEN_TASK_RULES`。
+     - 實作 `enqueueTask`（通用防重複 + `age >= 18 && !workBuildingId` + 優先度 50 + 有效 190 分鐘）與 `processTaskQueue`（`latestAcceptVirtualMin` 過期／`canExecute` 失敗即移除；透過 `EXECUTE_TASK` 執行成功移除、執行失敗保留待下一輪）。
+  3. **週期模擬與市民端找工作媒合（[`src/simulation/CitizenManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts)、[`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)、[`src/main.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/main.ts)）**：
+     - 實作 `stepPeriodicSimulation`（每 10 虛擬分鐘執行 1 次檢查，第 `10n` 次檢查全城同步派發 `FIND_JOB`）。
+     - 實作 `tryAssignNearestReachableJob`：從市民出發依直線距離排序空缺工廠，經 `PedestrianNetwork.findPathBetweenBuildings` 確認步行可達後錄取並同步工廠 `employedWorkerIds` 與 `IndustrialStateMachine`。
+  4. **移除測試上班按鈕與 UI 顯示增強（[`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)、[`src/ui/BuildingTooltip.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildingTooltip.ts)）**：
+     - 徹底移除 `#dev-commute-test-btn`、`#dev-commute-return-btn`、`#dev-commute-log` 及 `testRandomCitizenCommute`。
+     - 於 `DevMenu` 新增週期檢查次數徽章與市民任職公司／任務排隊顯示，並讓 `BuildingTooltip` 直接顯示居民就職工廠與待業／找工作中狀態。
+
+### 本輪異動檔案清單
+1. `src/types/citizen.ts`（修改）：新增 `CitizenTaskType`、`CitizenTaskItem` 與 `CitizenProfile.taskQueue`。
+2. `src/simulation/TimeManager.ts`（修改）：新增 `totalVirtualMinutes` 累計與 `getTotalVirtualMinutes()`。
+3. `src/simulation/CitizenStateMachine.ts`（修改）：新增 `CITIZEN_TASK_RULES`（`FIND_JOB`）、`EXECUTE_TASK` 事件、`enqueueTask`、`isTaskExpired`、`processTaskQueue`。
+4. `src/simulation/CitizenManager.ts`（修改）：移除 `testRandomCitizenCommute`，新增 `stepPeriodicSimulation`、`getPeriodicCheckStats`、`tryAssignNearestReachableJob`。
+5. `src/systems/BuildingManager.ts`（修改）：移除測試通勤轉發，新增 `stepCitizenPeriodicSimulation`、`getBuildingById` 並傳遞 `buildings` 至 Tooltip。
+6. `src/main.ts`（修改）：於非暫停模擬步驟內呼叫 `buildingManager.stepCitizenPeriodicSimulation(timeManager.getTotalVirtualMinutes())`。
+7. `src/ui/DevMenu.ts`、`src/ui/BuildingTooltip.ts`（修改）：徹底移除測試上班按鈕並新增週期檢查徽章與市民就業／找工作狀態呈現。
+8. `scratch/test_citizen_state_machine.ts`、`scratch/test_pedestrian_citizen_managers.ts`（修改）：同步更新測試腳本驗證時鐘、防重複、190 分過期、失敗保留、不依賴 `atHome` 及每 10 次全城找工作配對流程。
+9. `MarkDown/Dissusion_withDEV.md`、`MarkDown/Agent_technique_record.md`、`MarkDown/Agent_dev_log.md`（更新）：登錄第 60 輪討論定案、技術細節與開發日誌。
+
+### 驗證結果
+- **構建驗證**：執行 `npm.cmd run build`（`tsc && vite build`），0 錯誤通過。
+- **全套自動化測試（6 支腳本全數通過）**：
+  - `scratch/test_pedestrian_citizen_managers.ts` 通過（含 `TimeManager` 時鐘、防重複、190 分鐘過期、失敗保留、第 10 次同步檢查自動分配最近步行可達工廠）
+  - `scratch/test_citizen_state_machine.ts` 通過
+  - `scratch/test_residential_state_machine.ts` 通過
+  - `scratch/test_industrial_state_machine.ts` 通過
+  - `scratch/test_lane_parking_commute.ts` 通過
+  - `scratch/test_environment_simulation.ts` 通過
+- **Git 遵循**：嚴格遵循指示，**不建立 GIT 版本**。

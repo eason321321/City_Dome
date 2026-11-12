@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { VehicleModelFactory } from '../rendering/VehicleModelFactory';
 import { RoadNetwork, DirectedLane } from '../systems/RoadNetwork';
 import { Pathfinding, PathResult } from '../systems/Pathfinding';
-import type { BuildingManager } from '../systems/BuildingManager';
+import type { PedestrianManager } from './PedestrianManager';
 
 export interface ActiveVehicle {
   id: string;
@@ -41,7 +41,7 @@ export interface LaneVehicleEntry {
 export class VehicleManager {
   private scene: THREE.Scene;
   private roadNetwork: RoadNetwork;
-  private buildingManager: BuildingManager | null = null;
+  private pedestrianManager: PedestrianManager | null = null;
   private vehicles: ActiveVehicle[] = [];
   private nextVehicleId: number = 1;
 
@@ -72,8 +72,8 @@ export class VehicleManager {
     this.roadNetwork = roadNetwork;
   }
 
-  public setBuildingManager(buildingManager: BuildingManager): void {
-    this.buildingManager = buildingManager;
+  public setPedestrianManager(pedestrianManager: PedestrianManager): void {
+    this.pedestrianManager = pedestrianManager;
   }
 
   /**
@@ -180,12 +180,23 @@ export class VehicleManager {
   }
 
   /**
-   * 生成一輛沿著特定路徑行駛的測試車輛
+   * 內部共用車輛生成 helper（消除測試車輛與業務車輛的重複建構邏輯）
    */
-  public spawnTestVehicle(route: PathResult, colorHex?: number): ActiveVehicle | null {
+  private createActiveVehicle(
+    route: PathResult,
+    options: {
+      idPrefix: string;
+      colorHex?: number;
+      targetSpeed: number;
+      acceleration: number;
+      deceleration: number;
+      disappearImmediately?: boolean;
+      keepMeshOnArrive?: boolean;
+      onArrived?: (vehicle: ActiveVehicle) => void;
+    }
+  ): ActiveVehicle | null {
     const rwps = route.routeWaypoints;
     if (!route || !rwps || rwps.length < 2) {
-      console.warn('⚠️ 無法生成車輛：路徑無效或點數過少');
       return null;
     }
 
@@ -194,22 +205,25 @@ export class VehicleManager {
     const initDir = new THREE.Vector3().subVectors(nextPos, startPos).normalize();
     const initRotY = Math.atan2(initDir.x, initDir.z);
 
-    const mesh = VehicleModelFactory.createVehicle(colorHex);
+    const mesh = VehicleModelFactory.createVehicle(options.colorHex);
     mesh.position.copy(startPos);
     mesh.rotation.y = initRotY;
     this.scene.add(mesh);
 
     const vehicle: ActiveVehicle = {
-      id: `veh_${this.nextVehicleId++}`,
+      id: `${options.idPrefix}_${this.nextVehicleId++}`,
       mesh,
       route,
       currentWaypointIndex: 1,
       currentPosition: startPos,
       speed: 0,
-      targetSpeed: 8.5,       // 約 30 km/h 穩定巡航
-      acceleration: 4.5,      // 平滑起步加速
-      deceleration: 7.0,      // 平滑舒適煞車
+      targetSpeed: options.targetSpeed,
+      acceleration: options.acceleration,
+      deceleration: options.deceleration,
       state: 'Cruising',
+      disappearImmediately: options.disappearImmediately,
+      keepMeshOnArrive: options.keepMeshOnArrive,
+      onArrived: options.onArrived,
     };
 
     this.vehicles.push(vehicle);
@@ -217,8 +231,25 @@ export class VehicleManager {
   }
 
   /**
-   * 生成一輛自外部城市遷入住宅的市民車輛
-   * 行駛至家門前或最近停車位停車，並呼叫入住回調
+   * 生成一輛沿著特定路徑行駛的測試車輛
+   */
+  public spawnTestVehicle(route: PathResult, colorHex?: number): ActiveVehicle | null {
+    const vehicle = this.createActiveVehicle(route, {
+      idPrefix: 'veh',
+      colorHex,
+      targetSpeed: 8.5,
+      acceleration: 4.5,
+      deceleration: 7.0,
+    });
+    if (!vehicle) {
+      console.warn('⚠️ 無法生成車輛：路徑無效或點數過少');
+    }
+    return vehicle;
+  }
+
+  /**
+   * 生成一輛自外部城市遷入或通勤的市民車輛
+   * 行駛至目標停車位停車，並呼叫抵達回調
    */
   public spawnMovingInVehicle(
     route: PathResult,
@@ -226,39 +257,19 @@ export class VehicleManager {
     onArrived?: (vehicle: ActiveVehicle) => void,
     keepMeshOnArrive: boolean = false
   ): ActiveVehicle | null {
-    const rwps = route.routeWaypoints;
-    if (!route || !rwps || rwps.length < 2) {
-      console.warn('⚠️ 無法生成市民遷入車輛：路徑無效');
-      return null;
-    }
-
-    const startPos = rwps[0].position.clone();
-    const nextPos = rwps[1].position.clone();
-    const initDir = new THREE.Vector3().subVectors(nextPos, startPos).normalize();
-    const initRotY = Math.atan2(initDir.x, initDir.z);
-
-    const mesh = VehicleModelFactory.createVehicle(colorHex ?? 0x2563eb);
-    mesh.position.copy(startPos);
-    mesh.rotation.y = initRotY;
-    this.scene.add(mesh);
-
-    const vehicle: ActiveVehicle = {
-      id: `citizen_car_${this.nextVehicleId++}`,
-      mesh,
-      route,
-      currentWaypointIndex: 1,
-      currentPosition: startPos,
-      speed: 0,
-      targetSpeed: 6.5, // 舒適巡航速 (適度放慢提供流暢優雅的行車與轉彎觀察感)
+    const vehicle = this.createActiveVehicle(route, {
+      idPrefix: 'citizen_car',
+      colorHex: colorHex ?? 0x2563eb,
+      targetSpeed: 6.5,
       acceleration: 4.2,
       deceleration: 6.5,
-      state: 'Cruising',
       disappearImmediately: !keepMeshOnArrive,
       keepMeshOnArrive,
       onArrived,
-    };
-
-    this.vehicles.push(vehicle);
+    });
+    if (!vehicle) {
+      console.warn('⚠️ 無法生成市民遷入車輛：路徑無效');
+    }
     return vehicle;
   }
 
@@ -464,7 +475,7 @@ export class VehicleManager {
         const stopWp = rwps[nextStopLineIndex];
 
         // 4.2.1 轉彎禮讓行人機制：檢測轉入路口臂之斑馬線是否有行人穿越中
-        if (this.buildingManager && stopWp.intersectionKey) {
+        if (this.pedestrianManager && stopWp.intersectionKey) {
           let toDir: ('N' | 'S' | 'E' | 'W') | null = null;
           let fromDir: ('N' | 'S' | 'E' | 'W') | null = null;
 
@@ -487,7 +498,7 @@ export class VehicleManager {
             // 轉彎車（含迴轉）轉向目標路口臂：若目標斑馬線有行人穿越，禁止進入路口
             const isTurning = !isStraight;
             if (isTurning) {
-              const hasCrossingPed = this.buildingManager.isPedestrianCrossingCrosswalk(stopWp.intersectionKey, toDir);
+              const hasCrossingPed = this.pedestrianManager.isPedestrianCrossingCrosswalk(stopWp.intersectionKey, toDir);
               if (hasCrossingPed) {
                 isYieldingToPedestrian = true;
               }
@@ -590,8 +601,8 @@ export class VehicleManager {
       }
 
       // 4.3.1 行駛中即時行人近距離防撞禮讓（如車輛已在路口內或直行遇突發狀況）
-      if (this.buildingManager && !mustHoldAtStopLine) {
-        const pedAhead = this.buildingManager.findPedestrianAhead(v.currentPosition, v.mesh.rotation.y, 2.2);
+      if (this.pedestrianManager && !mustHoldAtStopLine) {
+        const pedAhead = this.pedestrianManager.findPedestrianAhead(v.currentPosition, v.mesh.rotation.y, 2.2);
         if (pedAhead) {
           v.isYieldingToPedestrian = true;
           targetSpeedForLead = 0;

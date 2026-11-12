@@ -25,6 +25,9 @@ export class BuildMenu {
   private currentZoningMode: 'Residential' | 'Industrial' | 'Dezone' = 'Residential';
   private currentZoningToolMode: ZoningToolMode = 'brush';
 
+  // 建造模式狀態監聽器 (供地形網格等系統連動淡入淡出)
+  private buildModeListeners: Set<(isActive: boolean) => void> = new Set();
+
   // DOM 參照 - 分類導航
   private zoningCategoryBtn!: HTMLButtonElement;
   private roadCategoryBtn!: HTMLButtonElement;
@@ -752,18 +755,40 @@ export class BuildMenu {
 
   // --- 土地劃分控制邏輯 ---
 
+  /**
+   * 訂閱建造模式切換事件 (道路鋪設或分區劃分啟動時為 true，退出為 false)
+   */
+  public onBuildModeChange(listener: (isActive: boolean) => void): () => void {
+    this.buildModeListeners.add(listener);
+    listener(this.isAnyBuildToolActive());
+    return () => this.buildModeListeners.delete(listener);
+  }
+
+  public isAnyBuildToolActive(): boolean {
+    return this.isTwoLaneSelected || this.isZoningMenuOpen;
+  }
+
+  private notifyBuildModeListeners(): void {
+    const active = this.isAnyBuildToolActive();
+    for (const listener of this.buildModeListeners) {
+      listener(active);
+    }
+  }
+
   private openZoningTool(mode: 'Residential' | 'Industrial' | 'Dezone'): void {
     this.isZoningMenuOpen = true;
     this.currentZoningMode = mode;
     this.zoningManager.setToolActive(true, mode);
     this.zoningManager.setToolMode(this.currentZoningToolMode);
     this.updateZoningUI();
+    this.notifyBuildModeListeners();
   }
 
   private closeZoningTool(): void {
     this.isZoningMenuOpen = false;
     this.zoningManager.setToolActive(false);
     this.updateZoningUI();
+    this.notifyBuildModeListeners();
   }
 
   private setZoningMode(mode: 'Residential' | 'Industrial' | 'Dezone'): void {
@@ -931,12 +956,14 @@ export class BuildMenu {
     this.isTwoLaneSelected = true;
     this.roadManager.setToolActive(true);
     this.updateRoadMenuUI();
+    this.notifyBuildModeListeners();
   }
 
   private deselectRoadTool(): void {
     this.isTwoLaneSelected = false;
     this.roadManager.setToolActive(false);
     this.updateRoadMenuUI();
+    this.notifyBuildModeListeners();
   }
 
   private closeRoadTool(): void {
