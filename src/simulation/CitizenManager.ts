@@ -1,13 +1,9 @@
 import {
   CitizenProfile,
-  TransitPreference,
-  TravelMode,
 } from '../types/citizen';
 import {
   PlacedBuilding,
   ResidenceVehicle,
-  TravelDecisionOptions,
-  TravelDecisionResult,
 } from '../types/building';
 import { RoadNetwork } from '../systems/RoadNetwork';
 import { PedestrianNetwork } from '../systems/PedestrianNetwork';
@@ -18,10 +14,10 @@ import { ParkingManager } from './ParkingManager';
 import { CitizenStateContext, CitizenStateMachine } from './CitizenStateMachine';
 import { IndustrialStateMachine } from './IndustrialStateMachine';
 import { ResidentialStateMachine } from './ResidentialStateMachine';
+import { TravelModeEvaluator, TravelDecisionPlan } from './TravelModeEvaluator';
 
 export interface CitizenManagerSyncHooks {
   onBuildingStateChanged?: (building: PlacedBuilding) => void;
-  onCommuteStateChanged?: () => void;
 }
 
 /**
@@ -29,7 +25,7 @@ export interface CitizenManagerSyncHooks {
  * 負責：
  * 1. 全城市民 Map 註冊與 O(1) 查詢、基本資料生成
  * 2. 每 10 虛擬分鐘推進全城共用狀態機檢查、每 10 次同步觸發找工作任務入隊與列隊消費
- * 3. 市民出行方式決策 (decideCitizenTravel) 與住宅車輛借出/歸還統一操作
+ * 3. 市民出行方式純決策評估 (evaluateCitizenTravel) 與住宅車輛借出/歸還統一窗口
  */
 export class CitizenManager {
   public static readonly STATE_CHECK_INTERVAL_MIN: number = 10;
@@ -57,6 +53,10 @@ export class CitizenManager {
 
   public setParkingManager(parkingManager: ParkingManager | null): void {
     this.parkingManager = parkingManager;
+  }
+
+  public getPedestrianManager(): PedestrianManager {
+    return this.pedestrianManager;
   }
 
   public setSyncHooks(hooks: CitizenManagerSyncHooks): void {
@@ -100,18 +100,14 @@ export class CitizenManager {
         ? maleNames[Math.floor(Math.random() * maleNames.length)]
         : femaleNames[Math.floor(Math.random() * femaleNames.length)];
 
-      const isAdult = age >= 18;
-      const transitPreference: TransitPreference = !isAdult
-        ? (Math.random() < 0.6 ? 'WalkIfClose' : 'PreferTransit')
-        : (Math.random() < 0.45 ? 'DriveOnly' : (Math.random() < 0.75 ? 'WalkIfClose' : 'PreferTransit'));
-
       const profile: CitizenProfile = {
         id: `cit_${this.nextCitizenId++}`,
         name: `${surname}${givenName}`,
         gender,
         age,
         homeBuildingId: buildingId,
-        transitPreference,
+        workBuildingId: undefined,
+        earliestWorkTime: undefined,
         currentActivity: 'MovingIn',
         atHome: false,
         hasVisibleModel: false,
@@ -120,6 +116,7 @@ export class CitizenManager {
           isUsingVehicle: false,
         },
         taskQueue: [],
+        activePipeline: undefined,
       };
 
       this.citizens.set(profile.id, profile);
@@ -137,23 +134,29 @@ export class CitizenManager {
   }
 
   /**
-   * 取得指定住宅或全城所有市民清單
+   * 取得指定住宅或全城所有市民清單（由 ResidentialProfile.residentIds 映射 O(1) 查找）
    */
   public getAllResidents(
     buildings: Map<string, PlacedBuilding>,
     buildingId?: string
   ): CitizenProfile[] {
     if (buildingId) {
-      const b = buildings.get(buildingId);
-      return b ? [...b.residents] : [];
+      const ids = buildings.get(buildingId)?.residentialProfile?.residentIds ?? [];
+      const result: CitizenProfile[] = [];
+      for (const id of ids) {
+        const c = this.citizens.get(id);
+        if (c) result.push(c);
+      }
+      return result;
     }
     return Array.from(this.citizens.values());
   }
 
   /**
-   * 共用車輛借出 helper（統一更新住宅車輛與市民車輛使用登記）
+   * 共用車輛借出窗口（統一更新住宅車輛清單統計與市民車輛使用登記）
+   * 供後續狀態機系統與出行執行系統調度住宅名下車輛借出使用
    */
-  private checkoutVehicle(
+  public checkoutVehicle(
     citizen: CitizenProfile,
     homeBuilding: PlacedBuilding,
     vehicle: ResidenceVehicle
@@ -161,20 +164,26 @@ export class CitizenManager {
     vehicle.status = 'in_use';
     vehicle.currentDriverCitizenId = citizen.id;
     vehicle.currentDriverName = citizen.name;
+    if (homeBuilding.residentialProfile) {
+      ResidentialStateMachine.refreshVehicleCounts(homeBuilding.residentialProfile);
+    }
     CitizenStateMachine.registerVehicleUsage(citizen, vehicle.id, homeBuilding.id, 'drive');
+    this.hooks.onBuildingStateChanged?.(homeBuilding);
   }
 
   /**
-   * 共用車輛歸還 helper
+   * 共用車輛歸還窗口（統一更新住宅車輛清單統計、清理路邊停車位並清除市民車輛登記）
+   * 供後續狀態機系統與出行執行系統調度市民返家還車使用
    */
-  private returnVehicleToHome(
+  public returnVehicleToHome(
     citizen: CitizenProfile,
     homeBuilding: PlacedBuilding,
     reParkAtHome: boolean = false
   ): void {
+    const resProfile = homeBuilding.residentialProfile;
     const usedVehicleId = citizen.vehicleRegistration.vehicleId ?? citizen.currentVehicleId;
-    if (usedVehicleId) {
-      const veh = homeBuilding.vehicles.find((v) => v.id === usedVehicleId);
+    if (usedVehicleId && resProfile) {
+      const veh = resProfile.vehicles.find((v) => v.id === usedVehicleId);
       if (veh) {
         if (reParkAtHome) {
           if (veh.parkedCarId && this.parkingManager) {
@@ -188,7 +197,7 @@ export class CitizenManager {
             homeBuilding.targetRoadTileKey
           );
           if (homeSpot && this.parkingManager) {
-            const mesh = veh.mesh ?? VehicleModelFactory.createVehicle(veh.color);
+            const mesh = VehicleModelFactory.createVehicle(veh.color);
             const parked = this.parkingManager.parkExistingCarMesh(
               mesh,
               homeSpot,
@@ -198,190 +207,37 @@ export class CitizenManager {
             );
             veh.parkedCarId = parked.id;
             veh.parkedSpot = homeSpot;
-            veh.mesh = mesh;
           }
         }
 
         veh.status = 'available';
         veh.currentDriverCitizenId = undefined;
         veh.currentDriverName = undefined;
+        ResidentialStateMachine.refreshVehicleCounts(resProfile);
       }
     }
     CitizenStateMachine.clearVehicleUsage(citizen);
-  }
-
-  /**
-   * 住宅內市民出行方式決策 (核心邏輯)
-   */
-  public decideCitizenTravel(
-    citizenId: string,
-    buildings: Map<string, PlacedBuilding>,
-    options?: TravelDecisionOptions
-  ): TravelDecisionResult {
-    const foundCitizen = this.citizens.get(citizenId);
-    const homeBuilding = foundCitizen ? buildings.get(foundCitizen.homeBuildingId) : undefined;
-
-    if (!foundCitizen || !homeBuilding) {
-      return {
-        success: false,
-        citizenId,
-        citizenName: '未知市民',
-        citizenAge: 0,
-        buildingId: '',
-        buildingName: '',
-        selectedMode: 'walk',
-        canDrive: false,
-        availableVehiclesCount: 0,
-        totalVehiclesCount: 0,
-        reason: '找不到該市民或其所屬住宅',
-        timestamp: Date.now(),
-      };
-    }
-
-    if (!foundCitizen.atHome || foundCitizen.currentActivity !== 'AtHome') {
-      return {
-        success: false,
-        citizenId: foundCitizen.id,
-        citizenName: foundCitizen.name,
-        citizenAge: foundCitizen.age,
-        buildingId: homeBuilding.id,
-        buildingName: homeBuilding.metadata.name,
-        selectedMode: foundCitizen.currentTravelMode || 'walk',
-        canDrive: false,
-        availableVehiclesCount: homeBuilding.vehicles.filter((v) => v.status === 'available').length,
-        totalVehiclesCount: homeBuilding.vehicles.length,
-        reason: `市民目前已在出行狀態中 (${foundCitizen.currentActivity})，需返家後方能再次出發`,
-        timestamp: Date.now(),
-      };
-    }
-
-    const isAdult = foundCitizen.age >= 18;
-    const availableVehicles = homeBuilding.vehicles.filter((v) => v.status === 'available');
-    const totalVehicles = homeBuilding.vehicles.length;
-    const canDrive = isAdult && availableVehicles.length > 0;
-
-    let selectedMode: TravelMode = 'walk';
-    let selectedVehicle: ResidenceVehicle | undefined = undefined;
-    let reason = '';
-
-    if (options?.forceMode) {
-      if (options.forceMode === 'drive') {
-        if (canDrive) {
-          selectedMode = 'drive';
-          selectedVehicle = availableVehicles[0];
-          reason = `指定開車出行：成功選用住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 出發。`;
-        } else if (!isAdult) {
-          selectedMode = 'walk';
-          reason = `指定開車失敗：市民未滿 18 歲 (${foundCitizen.age}歲)，無法駕車，改為步行出發。`;
-        } else {
-          selectedMode = 'walk';
-          reason = `指定開車失敗：住宅名下 ${totalVehicles} 輛車目前皆在出行使用中，改為步行出發。`;
-        }
-      } else {
-        selectedMode = options.forceMode;
-        reason = `指定以 ${selectedMode === 'walk' ? '步行' : '大眾運輸'} 出行，住宅名下車輛保留在住宅旁。`;
-      }
-    } else {
-      if (canDrive) {
-        if (foundCitizen.transitPreference === 'DriveOnly') {
-          selectedMode = 'drive';
-          selectedVehicle = availableVehicles[0];
-          reason = `市民偏好開車，選擇使用住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 出行。`;
-        } else if (foundCitizen.transitPreference === 'WalkIfClose') {
-          const isClose = options?.distanceMeters !== undefined ? options.distanceMeters <= 20 : Math.random() < 0.5;
-          if (isClose) {
-            selectedMode = 'walk';
-            reason = `市民偏好短途步行，雖住宅有名下車輛可用，評估後仍選擇步行出發。`;
-          } else {
-            selectedMode = 'drive';
-            selectedVehicle = availableVehicles[0];
-            reason = `出行距離較遠，市民決定開住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 出發。`;
-          }
-        } else {
-          const chooseTransit = Math.random() < 0.6;
-          if (chooseTransit) {
-            selectedMode = 'transit';
-            reason = `市民偏好大眾運輸，保留住宅名下車輛，選擇搭乘公車/捷運出行。`;
-          } else {
-            selectedMode = 'drive';
-            selectedVehicle = availableVehicles[0];
-            reason = `市民考慮班次後，改選住宅名下 [${selectedVehicle.sourceLabel} · ${selectedVehicle.colorName}] 開車出行。`;
-          }
-        }
-      } else {
-        if (!isAdult) {
-          selectedMode = 'walk';
-          reason = `市民年齡為 ${foundCitizen.age} 歲（未滿 18 歲），不可單獨駕車，選擇步行/大眾運輸出行。`;
-        } else if (totalVehicles === 0) {
-          selectedMode = 'walk';
-          reason = `住宅名下尚無登記車輛，選擇步行出行。`;
-        } else {
-          selectedMode = 'walk';
-          reason = `住宅名下 ${totalVehicles} 輛車已全數由其他合居成員出行使用中，選擇步行出行。`;
-        }
-      }
-    }
-
-    if (selectedMode === 'drive' && selectedVehicle) {
-      this.checkoutVehicle(foundCitizen, homeBuilding, selectedVehicle);
-    } else {
-      const nonDriveMode = selectedMode === 'transit' ? 'transit' : 'walk';
-      CitizenStateMachine.registerNonVehicleTravel(foundCitizen, nonDriveMode);
-    }
-
-    CitizenStateMachine.transitionTo(foundCitizen, 'Traveling');
-    homeBuilding.currentOccupants = Math.max(0, homeBuilding.currentOccupants - 1);
     this.hooks.onBuildingStateChanged?.(homeBuilding);
-
-    return {
-      success: true,
-      citizenId: foundCitizen.id,
-      citizenName: foundCitizen.name,
-      citizenAge: foundCitizen.age,
-      buildingId: homeBuilding.id,
-      buildingName: homeBuilding.metadata.name,
-      selectedMode,
-      selectedVehicle,
-      canDrive,
-      availableVehiclesCount: homeBuilding.vehicles.filter((v) => v.status === 'available').length,
-      totalVehiclesCount: totalVehicles,
-      reason,
-      timestamp: Date.now(),
-    };
   }
 
   /**
-   * 市民出行返家 (歸還車輛，嚴格清除場上模型後方重設 AT_home)
+   * 市民移動時選定交通方式之純決策評估 (委派 TravelModeEvaluator，100% 無副作用)
    */
-  public returnCitizenToResidence(
+  public evaluateCitizenTravel(
     citizenId: string,
+    originBuildingId: string,
+    destBuildingId: string,
     buildings: Map<string, PlacedBuilding>
-  ): { success: boolean; reason: string } {
-    const foundCitizen = this.citizens.get(citizenId);
-    const homeBuilding = foundCitizen ? buildings.get(foundCitizen.homeBuildingId) : undefined;
+  ): TravelDecisionPlan | null {
+    const citizen = this.citizens.get(citizenId);
+    const origin = buildings.get(originBuildingId);
+    const dest = buildings.get(destBuildingId);
+    if (!citizen || !origin || !dest) return null;
 
-    if (!foundCitizen || !homeBuilding) {
-      return { success: false, reason: '找不到該市民或其所屬住宅' };
-    }
-
-    if (foundCitizen.atHome && foundCitizen.currentActivity === 'AtHome') {
-      return { success: false, reason: `${foundCitizen.name} 已經在家中` };
-    }
-
-    this.pedestrianManager.removePedestriansByCitizenId(citizenId);
-    this.returnVehicleToHome(foundCitizen, homeBuilding, false);
-
-    CitizenStateMachine.transitionTo(foundCitizen, 'AtHome');
-    homeBuilding.currentOccupants += 1;
-    if (homeBuilding.residentialProfile && homeBuilding.residentialProfile.state !== 'Active') {
-      ResidentialStateMachine.transitionTo(homeBuilding.residentialProfile, 'Active');
-    }
-    this.hooks.onBuildingStateChanged?.(homeBuilding);
-
-    return {
-      success: true,
-      reason: `${foundCitizen.name} 已順利返家，所用交通方式已結算，住宅名下車輛已歸還恢復可用。`,
-    };
+    return TravelModeEvaluator.evaluate(citizen, origin, dest, {
+      buildings,
+      pedestrianNetwork: this.pedestrianNetwork,
+    });
   }
 
   /**
@@ -430,10 +286,6 @@ export class CitizenManager {
       }
     }
 
-    if (jobsAssigned > 0) {
-      this.hooks.onCommuteStateChanged?.();
-    }
-
     return { checksRun, jobsAssigned };
   }
 
@@ -451,10 +303,43 @@ export class CitizenManager {
   }
 
   /**
+   * 單一關係變更窗口：原子性建立「市民 <-> 工廠」僱傭關係
+   * 避免單邊寫入導致資料不同步或殘留幽靈職位
+   */
+  public assignWorkerToFactory(citizen: CitizenProfile, factory: PlacedBuilding): boolean {
+    if (!factory.industrialProfile) return false;
+    if (!IndustrialStateMachine.hireWorker(factory.industrialProfile, citizen.id)) {
+      return false;
+    }
+    citizen.workBuildingId = factory.id;
+    citizen.earliestWorkTime = factory.industrialProfile.earliestWorkTime;
+    this.hooks.onBuildingStateChanged?.(factory);
+    return true;
+  }
+
+  /**
+   * 單一關係變更窗口：原子性解除「市民 <-> 工廠」僱傭關係（供離職、裁員、拆廠使用）
+   */
+  public unassignWorkerFromFactory(
+    citizen: CitizenProfile,
+    buildings: Map<string, PlacedBuilding>
+  ): boolean {
+    if (!citizen.workBuildingId) return false;
+    const factory = buildings.get(citizen.workBuildingId);
+    if (factory?.industrialProfile) {
+      IndustrialStateMachine.fireWorker(factory.industrialProfile, citizen.id);
+      this.hooks.onBuildingStateChanged?.(factory);
+    }
+    citizen.workBuildingId = undefined;
+    citizen.earliestWorkTime = undefined;
+    return true;
+  }
+
+  /**
    * 市民端找工作核心實作：
    * 1. 篩選已完工、營運狀態為 Idle/Operating 且尚有空位的工廠
    * 2. 依住家至工廠的直線距離由近到遠排序
-   * 3. 逐一檢查住家與工廠之間是否至少存在一條步行可達路徑，找到第一家即錄取
+   * 3. 逐一檢查住家與工廠之間是否至少存在一條步行可達路徑，找到第一家即透過單一窗口錄取
    */
   private tryAssignNearestReachableJob(
     citizen: CitizenProfile,
@@ -466,11 +351,8 @@ export class CitizenManager {
 
     const candidates = industrialBuildings
       .filter((f) => {
-        if (f.status !== 'completed') return false;
-        const indState = f.industrialProfile?.state ?? 'Idle';
-        if (indState !== 'Idle' && indState !== 'Operating') return false;
-        const employedCount = f.employedWorkerIds ? f.employedWorkerIds.length : 0;
-        return employedCount < f.metadata.capacity;
+        if (f.status !== 'completed' || !f.industrialProfile) return false;
+        return IndustrialStateMachine.hasVacancy(f.industrialProfile);
       })
       .sort(
         (a, b) =>
@@ -480,72 +362,11 @@ export class CitizenManager {
 
     for (const factory of candidates) {
       const walkPath = this.pedestrianNetwork.findPathBetweenBuildings(homeBuilding, factory);
-      if (walkPath) {
-        if (!factory.employedWorkerIds) factory.employedWorkerIds = [];
-        if (!factory.employedWorkerIds.includes(citizen.id)) {
-          factory.employedWorkerIds.push(citizen.id);
-        }
-        citizen.workBuildingId = factory.id;
-
-        if (factory.industrialProfile) {
-          IndustrialStateMachine.syncWorkerCounts(
-            factory.industrialProfile,
-            factory.employedWorkerIds.length,
-            factory.currentOccupants
-          );
-          IndustrialStateMachine.dispatchEvent(factory.industrialProfile, {
-            type: 'WORKER_HIRED',
-            citizenId: citizen.id,
-          });
-        }
+      if (walkPath && this.assignWorkerToFactory(citizen, factory)) {
         return true;
       }
     }
 
     return false;
-  }
-
-  /**
-   * 召回所有外出上班與通勤中的市民平安返家
-   */
-  public recallAllCitizensToResidence(buildings: Map<string, PlacedBuilding>): number {
-    let count = 0;
-
-    this.pedestrianManager.clearAllPedestrians();
-
-    for (const bld of buildings.values()) {
-      if (bld.metadata.category === 'Residential_Low') {
-        for (const c of bld.residents) {
-          CitizenStateMachine.markModelDespawned(c);
-          if (!c.atHome || c.currentActivity !== 'AtHome') {
-            count++;
-            if (c.currentActivity === 'AtWork' && c.workBuildingId) {
-              const fac = buildings.get(c.workBuildingId);
-              if (fac && fac.currentOccupants > 0) {
-                fac.currentOccupants = Math.max(0, fac.currentOccupants - 1);
-                if (fac.industrialProfile) {
-                  IndustrialStateMachine.syncWorkerCounts(
-                    fac.industrialProfile,
-                    fac.employedWorkerIds?.length ?? 0,
-                    fac.currentOccupants
-                  );
-                }
-              }
-            }
-
-            this.returnVehicleToHome(c, bld, true);
-            CitizenStateMachine.transitionTo(c, 'AtHome');
-            bld.currentOccupants += 1;
-          }
-        }
-        if (bld.currentOccupants > 0 && bld.residentialProfile && bld.residentialProfile.state !== 'Active') {
-          ResidentialStateMachine.transitionTo(bld.residentialProfile, 'Active');
-        }
-        this.hooks.onBuildingStateChanged?.(bld);
-      }
-    }
-
-    this.hooks.onCommuteStateChanged?.();
-    return count;
   }
 }

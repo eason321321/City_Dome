@@ -1,4 +1,5 @@
 import { PlacedBuilding } from '../types/building';
+import { CitizenManager } from '../simulation/CitizenManager';
 import { PedestrianManager } from '../simulation/PedestrianManager';
 
 /**
@@ -36,12 +37,13 @@ export class BuildingTooltip {
     clientY: number,
     building: PlacedBuilding,
     pedestrianManager: PedestrianManager,
-    buildings?: Map<string, PlacedBuilding>
+    buildings?: Map<string, PlacedBuilding>,
+    citizenManager?: CitizenManager
   ): void {
     this.element.style.display = 'block';
     this.element.style.left = `${clientX + 14}px`;
     this.element.style.top = `${clientY + 14}px`;
-    this.updateContent(building, pedestrianManager, buildings);
+    this.updateContent(building, pedestrianManager, buildings, citizenManager);
   }
 
   public hide(): void {
@@ -51,13 +53,18 @@ export class BuildingTooltip {
   public updateContent(
     b: PlacedBuilding,
     pedestrianManager: PedestrianManager,
-    buildings?: Map<string, PlacedBuilding>
+    buildings?: Map<string, PlacedBuilding>,
+    citizenManager?: CitizenManager
   ): void {
     const meta = b.metadata;
 
     if (b.status === 'constructing') {
       const percent = Math.min(100, Math.floor(b.constructionProgress * 100));
       const remaining = Math.max(0, b.constructionDuration * (1.0 - b.constructionProgress));
+      const plannedPop = meta.category === 'Residential_Low'
+        ? (b.residentialProfile?.registeredResidents ?? 0)
+        : (b.industrialProfile?.maxWorkers ?? meta.capacity);
+      const plannedLabel = meta.category === 'Residential_Low' ? '規劃入住人數' : '最大員工容量';
 
       this.element.innerHTML = `
         <div style="font-weight: bold; font-size: 13px; color: #fbbf24; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
@@ -77,8 +84,8 @@ export class BuildingTooltip {
           <span style="color: #f1f5f9;">約 ${Math.round(remaining * 6)} 遊戲分鐘 (${(remaining / 10).toFixed(1)} 遊戲小時)</span>
         </div>
         <div style="font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; margin-top: 2px;">
-          <span>規劃入住人數:</span>
-          <span style="color: #4ade80;">${b.registeredResidents} 人 (房型上限 ${meta.capacity}人)</span>
+          <span>${plannedLabel}:</span>
+          <span style="color: #4ade80;">${plannedPop} 人 (上限 ${meta.capacity}人)</span>
         </div>
       `;
       return;
@@ -86,8 +93,8 @@ export class BuildingTooltip {
 
     if (meta.category === 'Industrial_Low') {
       const ind = b.industrialProfile;
-      const employedCount = ind ? ind.workerCount : (b.employedWorkerIds ? b.employedWorkerIds.length : 0);
-      const currentInside = ind ? ind.insideWorkerCount : b.currentOccupants;
+      const employedCount = ind ? ind.workerCount : 0;
+      const currentInside = ind ? ind.insideWorkerCount : 0;
       const maxWorkers = ind ? ind.maxWorkers : meta.capacity;
       const statusColor = employedCount > 0 ? '#4ade80' : '#fbbf24';
       const statusText = employedCount >= maxWorkers ? '已額滿運轉中' : (employedCount > 0 ? '招募中·運轉中' : '缺工招募中');
@@ -121,6 +128,10 @@ export class BuildingTooltip {
             <span style="color: #cbd5e1;">👥 工廠內員工數:</span>
             <span style="color: #4ade80; font-weight: bold;">${currentInside} 人</span>
           </div>
+          <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+            <span style="color: #cbd5e1;">⏰ 最早上班時間:</span>
+            <span style="color: #f1f5f9; font-weight: bold;">${ind?.earliestWorkTime ?? '06:00'}</span>
+          </div>
           <div style="display: flex; justify-content: space-between;">
             <span style="color: #cbd5e1;">🚚 工廠內貨車數:</span>
             <span style="color: #fbbf24; font-weight: bold;">${ind?.insideTruckCount ?? 1} 輛</span>
@@ -138,17 +149,21 @@ export class BuildingTooltip {
       return;
     }
 
-    const coLivingText = b.isCoLiving ? '🤝 與人合居' : '👤 獨立自住';
-    const resState = b.residentialProfile?.state;
-    const moveInBadge = b.currentOccupants > 0 || resState === 'Active'
+    const resProfile = b.residentialProfile;
+    const coLivingText = resProfile?.isCoLiving ? '🤝 與人合居' : '👤 獨立自住';
+    const resState = resProfile?.state;
+    const insideResidentCount = resProfile?.insideResidentCount ?? 0;
+    const registeredResidents = resProfile?.registeredResidents ?? 0;
+    const moveInBadge = insideResidentCount > 0 || resState === 'Active'
       ? '<span style="color: #4ade80;">● 已入住</span>'
       : (resState === 'WaitingForRoad'
           ? '<span style="color: #ef4444;">⚠️ 等待聯外道路</span>'
           : '<span style="color: #38bdf8;">🚗 遷入中...</span>');
 
     let vehiclesHtml = '';
-    if (b.vehicles && b.vehicles.length > 0) {
-      const listVehicles = b.vehicles.map((v, idx) => {
+    const resVehicles = resProfile?.vehicles ?? [];
+    if (resVehicles.length > 0) {
+      const listVehicles = resVehicles.map((v, idx) => {
         const statusText = v.status === 'available'
           ? '<span style="color: #4ade80;">● 閒置可用</span>'
           : (v.status === 'in_use'
@@ -166,7 +181,7 @@ export class BuildingTooltip {
         <div style="margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.08);">
           <div style="color: #38bdf8; font-weight: bold; font-size: 11px; margin-bottom: 3px; display: flex; justify-content: space-between;">
             <span>🚗 住宅名下車輛:</span>
-            <span style="color: #f1f5f9; font-weight: normal;">共 ${b.vehicles.length} 輛</span>
+            <span style="color: #f1f5f9; font-weight: normal;">共 ${resVehicles.length} 輛</span>
           </div>
           ${listVehicles}
         </div>
@@ -174,13 +189,13 @@ export class BuildingTooltip {
     }
 
     let residentsHtml = '';
-    if (b.residents && b.residents.length > 0) {
-      const listItems = b.residents.map((r) => {
+    const residents = citizenManager && buildings
+      ? citizenManager.getAllResidents(buildings, b.id)
+      : [];
+    if (residents.length > 0) {
+      const listItems = residents.map((r) => {
         const icon = r.gender === 'male' ? '👨' : '👩';
         const genderText = r.gender === 'male' ? '男' : '女';
-        const prefText = r.transitPreference === 'DriveOnly'
-          ? '偏好開車'
-          : (r.transitPreference === 'WalkIfClose' ? '短途步行' : '大眾運輸');
         let actText = '<span style="color: #4ade80;">在家</span>';
         if (!r.atHome || r.currentActivity !== 'AtHome') {
           if (r.currentActivity === 'MovingIn') {
@@ -217,9 +232,12 @@ export class BuildingTooltip {
         const workPlaceName = r.workBuildingId && buildings
           ? (buildings.get(r.workBuildingId)?.metadata.name ?? r.workBuildingId)
           : undefined;
+        const workInfo = r.workBuildingId
+          ? `${workPlaceName ?? '已就職'}${r.earliestWorkTime ? ` (${r.earliestWorkTime})` : ''}`
+          : undefined;
         const hasPendingJobTask = r.taskQueue?.some((t) => t.type === 'FIND_JOB') ?? false;
         const jobBadge = r.workBuildingId
-          ? `<span style="color: #4ade80;">💼 ${workPlaceName ?? '已就職'}</span>`
+          ? `<span style="color: #4ade80;">💼 ${workInfo}</span>`
           : (r.age < 18
               ? '<span style="color: #64748b;">🎒 未成年</span>'
               : (hasPendingJobTask
@@ -228,7 +246,7 @@ export class BuildingTooltip {
 
         return `
           <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
-            <span style="color: #f1f5f9;">${icon} ${r.name} <span style="font-size: 10px; color: #64748b;">(${prefText})</span></span>
+            <span style="color: #f1f5f9;">${icon} ${r.name}</span>
             <span>${actText} · ${jobBadge} · <span style="color: #94a3b8;">${genderText} ${r.age}歲</span></span>
           </div>
         `;
@@ -249,11 +267,11 @@ export class BuildingTooltip {
       </div>
       <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
         <span style="color: #94a3b8;">總登記居住者:</span>
-        <span style="color: #fbbf24; font-weight: bold;">${b.registeredResidents} 人 <span style="font-size: 10px; color: #64748b;">(上限 ${meta.capacity}人)</span></span>
+        <span style="color: #fbbf24; font-weight: bold;">${registeredResidents} 人 <span style="font-size: 10px; color: #64748b;">(上限 ${meta.capacity}人)</span></span>
       </div>
       <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
         <span style="color: #94a3b8;">現房內人數:</span>
-        <span style="color: #4ade80; font-weight: bold;">${b.currentOccupants} 人</span>
+        <span style="color: #4ade80; font-weight: bold;">${insideResidentCount} 人</span>
       </div>
       <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
         <span style="color: #94a3b8;">居住模式:</span>

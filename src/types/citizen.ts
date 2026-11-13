@@ -1,4 +1,4 @@
-import { EntityId } from './common';
+import { BasePipelineSession, BaseTaskItem, EntityId } from './common';
 
 /**
  * 市民行為狀態機所有狀態定義（全城共用）
@@ -15,11 +15,6 @@ export type CitizenActivityState =
   | 'CommutingToHome';   // 返家途中（預留）
 
 /**
- * 市民通勤偏好交通方式
- */
-export type TransitPreference = 'DriveOnly' | 'PreferTransit' | 'WalkIfClose';
-
-/**
  * 市民實際出行交通方式
  */
 export type TravelMode = 'drive' | 'walk' | 'transit';
@@ -27,23 +22,46 @@ export type TravelMode = 'drive' | 'walk' | 'transit';
 /**
  * 市民任務列隊事件類型（後續擴充新任務只需在此新增）
  */
-export type CitizenTaskType = 'FIND_JOB';
+export type CitizenTaskType = 'FIND_JOB' | 'COMMUTE_TO_WORK' | 'COMMUTE_TO_HOME';
 
 /**
- * 市民任務列隊項目
+ * 市民任務列隊項目（繼承共用 BaseTaskItem，包含優先度、最早執行時間與截止時間機制）
  */
-export interface CitizenTaskItem {
-  id: string;
-  type: CitizenTaskType;
-  /** 優先度 (1 ~ 100，由低到高；數值越大越優先處理) */
-  priority: number;
-  /** 加入列隊時之虛擬遊戲總分鐘 */
-  createdAtVirtualMin: number;
-  /** 最後接受時間 (虛擬遊戲總分鐘；超過即過期移除，null 表示無期限) */
-  latestAcceptVirtualMin: number | null;
-  /** 任務附帶參數（預留） */
-  payload?: unknown;
+export interface CitizenTaskItem extends BaseTaskItem<CitizenTaskType> {}
+
+/**
+ * 市民出行複合任務（上班／回家／休閒）微觀子階段定義
+ */
+export type CitizenTravelStage =
+  | 'EVALUATE_MODE'     // 階段 1：評估交通方式 (TravelModeEvaluator 純決策)
+  | 'WALK_TO_VEHICLE'   // 階段 2：步行前往住宅車輛停放處 (若需自駕出行)
+  | 'DRIVING_TO_DEST'   // 階段 3：駕駛車輛沿路網前往目標建築附近
+  | 'SEARCHING_PARKING' // 階段 4：就近尋找車位並停妥 (延遲決策)
+  | 'WALK_TO_ENTRANCE'  // 階段 5：下車走向目標建築大門
+  | 'ENTER_BUILDING';   // 階段 6：走入建築大門、銷毀模型並註冊狀態機 (AtWork / AtHome)
+
+/**
+ * 市民出行管線附帶上下文參數
+ */
+export interface CitizenTravelSessionPayload {
+  targetBuildingId?: EntityId;
+  travelMode?: TravelMode;
+  vehicleId?: EntityId;
+  pickupSpotId?: string;
+  targetSpotId?: string;
+  walkDistanceMeters?: number;
+  reason?: string;
+  [key: string]: any;
 }
+
+/**
+ * 市民出行複合任務微觀管線會話
+ */
+export interface CitizenPipelineSession
+  extends BasePipelineSession<CitizenTaskType, CitizenTravelStage> {
+  payload?: CitizenTravelSessionPayload;
+}
+
 
 /**
  * 市民出行車輛使用登記（靜態資料中的借車紀錄）
@@ -69,7 +87,6 @@ export interface CitizenNeeds {
   overallHappiness: number;              // 總體滿意度
   health: number;                        // 健康指標（受醫療與污染影響）
   education: number;                     // 受教育程度
-  commuteSatisfaction: number;           // 通勤舒適度（受塞車時間長短影響）
   wealthLevel: number;                   // 財富階層 (1-3)
 }
 
@@ -95,7 +112,12 @@ export interface CitizenProfile {
   age: number;
   homeBuildingId: EntityId;              // 住家建築 ID
   workBuildingId?: EntityId;             // 工作地點建築 ID（若有入職）
-  transitPreference: TransitPreference;  // 通勤出行偏好
+
+  /**
+   * 市民個人最早上班時間（例如 '06:00'）
+   * 入職時由工作地點（如低密度工業區）之 profile 寫入市民 profile；未就業或離職時為 undefined
+   */
+  earliestWorkTime?: string;
 
   // 狀態機狀態與在場模型標記
   currentActivity: CitizenActivityState; // 當前狀態機狀態
@@ -117,6 +139,11 @@ export interface CitizenProfile {
 
   // 市民任務列隊清單（依優先度排序）
   taskQueue: CitizenTaskItem[];
+
+  /**
+   * 當前正在執行之微觀子任務管線會話（若為 undefined 表示當前無微觀子任務推進中）
+   */
+  activePipeline?: CitizenPipelineSession;
 
   // 向下相容便捷欄位（與 vehicleRegistration 同步維護）
   currentVehicleId?: EntityId;           // 若當前出行駕駛中，所使用之住宅車輛 ID

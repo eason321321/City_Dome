@@ -2126,3 +2126,353 @@ $$v_{\text{arrival}} = \begin{cases}
 - **主循環串接與 UI 清理 (`src/main.ts`, `src/ui/DevMenu.ts`, `src/ui/BuildingTooltip.ts`)**：
   - `main.ts` 於非暫停狀態推進 `buildingManager.stepCitizenPeriodicSimulation(timeManager.getTotalVirtualMinutes())`。
   - 徹底移除 `#dev-commute-test-btn`、`#dev-commute-return-btn`、`#dev-commute-log` 與 `testRandomCitizenCommute`，並於 `DevMenu` 顯示 `#dev-citizen-check-badge` 與每位市民的就業／排隊狀態，`BuildingTooltip` 同步顯示任職工廠名稱或待業／找工作中標籤。
+
+
+
+---
+
+### 五十四、 路線 A 全面收斂：`Profile + Shared StateMachine` 單一事實來源重構 (Round 61)
+
+#### 54.1 `PlacedBuilding` 外殼化與純資料 `Profile` 統一 (`src/types/building.ts`, `src/types/industrial.ts`, `src/types/residential.ts`)
+- **`PlacedBuilding` 欄位瘦身**：移除 `registeredResidents`、`currentOccupants`、`employedWorkerIds`、`isCoLiving`、`residents`、`vehicles` 六項業務重複欄位，`PlacedBuilding` 僅保留空間幾何、建造進度進場網格、聯外道路鍵值與 `residentialProfile` / `industrialProfile` 指標。
+- **`ResidenceVehicle` 純資料化**：移除 `mesh?: THREE.Group`，僅保留純資料欄位（`id`、`buildingId`、`status`、`parkedCarId`、`parkedSpot`、`currentDriverCitizenId` 等）；車輛 3D 網格統一交由 `ParkingManager` 與 `VehicleManager` 持有與生成。
+- **`IndustrialLowProfile` 納入員工 ID 清單**：新增 `employedWorkerIds: EntityId[]`；`workerCount` 恆等於 `employedWorkerIds.length`。
+- **`ResidentialProfile` 納入居民 ID 與車輛資料**：新增 `residentIds: EntityId[]`（僅存 `EntityId`，完整 [`CitizenProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts) 統一由 `CitizenManager.citizens` 託管）與 `vehicles: ResidenceVehicle[]`。
+
+#### 54.2 共用狀態機內聚領域操作、全面移除 `sync*` (`src/simulation/IndustrialStateMachine.ts`, `src/simulation/ResidentialStateMachine.ts`)
+- **移除外部同步方法**：廢除 `IndustrialStateMachine.syncWorkerCounts`、`ResidentialStateMachine.syncCounts` 與 `BuildingManager.syncResidentialProfileCounts`。
+- **狀態機領域方法 (`IndustrialStateMachine`)**：
+  - `hasVacancy(factory)`、`hireWorker(factory, citizenId)`、`fireWorker(factory, citizenId)`、`recordWorkerEntered(factory, citizenId)`、`recordWorkerLeft(factory, citizenId)`，於單一入口同時維護名單、人數與事件分派（新增 `WORKER_FIRED` 事件）。
+- **狀態機領域方法 (`ResidentialStateMachine`)**：
+  - `hasRemainingCapacity`、`addDemandResidents`、`addResidentIds`、`registerVehicle`、`refreshVehicleCounts`、`getAvailableVehicles`、`recordResidentEntered`（含自動切換 `'Active'`）、`recordResidentLeft`。
+
+#### 54.3 跨物件雙向關係單一窗口與 UI 接軌 (`src/simulation/CitizenManager.ts`, `src/systems/BuildingManager.ts`, `src/ui/DevMenu.ts`, `src/ui/BuildingTooltip.ts`)
+- **僱傭關係原子窗口**：`CitizenManager` 新增 `assignWorkerToFactory(citizen, factory)` 與 `unassignWorkerFromFactory(citizen, buildings)`，統一同步 `citizen.workBuildingId` 與 `IndustrialStateMachine.hireWorker/fireWorker`。
+- **居民查詢集中化**：`CitizenManager.getAllResidents` 透過 `ResidentialProfile.residentIds` 對 `CitizenManager.citizens` 進行 $O(1)$ 映射回傳；[`BuildingTooltip`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildingTooltip.ts) 與 [`DevMenu`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts) 全面改為單一讀取 `*Profile` 與 `getAllResidents`。
+
+---
+
+### 五十五、 自動住房需求生成與市政顧問提示通知系統 (Round 62)
+
+#### 55.1 自動住房需求產生與人口上限門檻 (`src/systems/BuildingManager.ts`)
+- 實作 `stepAutoHousingDemand(currentVirtualMin: number)`，以 `lastAutoDemandVirtualMin` 記錄上次觸發虛擬時刻。
+- 當 `getTotalPopulation() < 30` 且 `currentVirtualMin - lastAutoDemandVirtualMin >= 5`（遊戲時間每 5 虛擬分鐘）時，自動調用 `generateRandomDemand()` 生成 1~5 人的住房需求。
+- 佇列採用 `MAX_DEMAND_QUEUE_SIZE = 50` 環形防溢上限，當超過 50 筆未配對時自動剔除最舊一筆。
+
+#### 55.2 市政顧問（小鳥圖示）通知系統 (`src/ui/CityAdvisor.ts`)
+- 畫面右上角常駐 44px 圓形毛玻璃小鳥圖標，支援點擊開關與微縮動畫。
+- 監聽配對失敗事件：當失敗原因為「無可用建地」時，觸發小鳥跳躍動畫並彈出氣泡對話框提示市長增建住宅。
+- 對話框設定 4 秒自動淡出隱藏，並實施 10 秒冷卻保護避免洗版。
+
+---
+
+### 五十六、 開發者工具箱「交通」分頁重構、行人尋路起訖實測與暫時測試行人生命週期管理 (Round 63)
+
+#### 56.1 交通測試雙子模式切換 (`src/ui/DevMenu.ts`)
+- 將開發者選單（DevMenu）原 `🚗 車輛` 分頁標籤更名為 `🚦 交通`，內部提供車輛與行人之分頁切換按鈕組 (`#dev-traffic-mode-car` 與 `#dev-traffic-mode-ped`)。
+- 切換模式時呼叫 `resetPoints()` 清理地標射線與航點，並動態自適應更換標題、說明、步驟引導文字、按鈕文字 (`🚀 發車實測` / `🚶 行人出發`、`🗑️ 清除所有測試車輛` / `🗑️ 清除所有測試行人`)。
+
+#### 56.2 人行道路網節點拾取與導航視覺標記 (`src/ui/DevMenu.ts`, `src/systems/PedestrianNetwork.ts`)
+- **人行節點拾取 (`pickPedestrianNodeUnderMouse`)**：
+  - 射線首先穿透道路幾何底板 `tiles.map(t => t.mesh)` 或地表面 $Y = 0$，取得世界座標點。
+  - 呼叫 `roadNetwork.getPedestrianNetwork().findClosestNode(hitPoint, false)` 檢索最近之人行道或斑馬線節點，距離平方 $\le 2.5^2$ 時成功吸附。
+- **懸浮與光軌視覺標記**：
+  - 建立專屬發光青色圓柱標記 (`hoverPedMarker`：半徑 0.18m、高度 0.04m)，即時吸附至選中之行人節點上方 $Y + 0.02\text{m}$。
+  - 點選起訖點後，呼叫 `pedNet.findShortestPath(startPos, endPos, false)` 計算最短行人路徑，並透過 `drawRoutePath` 繪製高辨識度青藍色航線。
+
+#### 56.3 純測試行人實體生成與生命週期管理 (`src/simulation/PedestrianManager.ts`)
+- **擴充 `ActivePedestrian`**：
+  - 新增 `isTest?: boolean` 與 `arrivedWaitTimer?: number`，`profile` 標記為可選。
+- **測試行人專屬生成 (`spawnTestPedestrian`)**：
+  - 依起點方向設定初始面向角，將 3D 模型加入 `pedestrianContainer`。
+  - 嚴格隔離正式市民系統：**不生成 `CitizenProfile`**、**不調用 `CitizenStateMachine.markModelSpawned`**、**不納入人口統計**。
+- **抵達後停留 3 秒自動銷毀**：
+  - 當 `ped.currentWaypointIndex >= wps.length` 抵達終點時：
+    1. 退出斑馬線與號誌停等狀態。
+    2. 調用 `CitizenModelFactory.resetCitizenPose(ped.mesh)` 恢復為自然站立姿態，停止踩步動畫。
+    3. 累加 `ped.arrivedWaitTimer += deltaTime`。
+    4. 當 `arrivedWaitTimer >= 3.0` 秒時，自動將 3D 模型自 `pedestrianContainer` 移除並自陣列剔除。
+- **批次清理 (`clearAllTestPedestrians`)**：
+  - 遍歷過濾 `ped.isTest === true` 之實體並移除 3D 網格，不干擾常規搬入與通勤市民。
+
+---
+
+### 五十七、 市民移動交通方式純決策器（TravelModeEvaluator）與 100m 鄰里生活圈判定策略 (Round 64)
+
+#### 57.1 純決策器（Evaluator）與執行器（Dispatcher）架構解耦
+- **純無副作用運算**：
+  - 建立 [`src/simulation/TravelModeEvaluator.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/TravelModeEvaluator.ts)。
+  - 函式簽名：`TravelModeEvaluator.evaluate(citizen, originBuilding, destBuilding, context)`。
+  - 純輸出 `TravelDecisionPlan`（包含 `selectedMode: 'drive' | 'walk'`、真實人行道步行距離 `walkDistanceMeters`、決策原因 `reason`、是否需要前置取車 `needsWalkToCar`、選用車輛 `vehicle` 與停放處 `pickupSpot / carPosition`）。
+  - **嚴格守則**：決策器不執行 `transitionTo`、不執行 `checkoutVehicle`、不扣減 `residentialProfile` 數值。
+- **調用邊界**：
+  - 僅於市民產生「宏觀出行意圖」且交通方式未知時呼叫；後續「走去開車」、「開車行駛中」等微觀執行子行為屬於執行階段，不重複調用決策器。
+
+#### 57.2 判定策略決策樹與 100m 鄰里生活圈門檻
+- **鄰里短途步行門檻**：`SHORT_WALK_DISTANCE_THRESHOLD = 100`（公尺，約 10 個標準路塊）。
+- **真實路網距離計算**：
+  - 優先呼叫 `pedestrianNetwork.findPathBetweenBuildings(origin, dest)` 取得真實沿著人行道與斑馬線轉折之總距離。
+  - 若路網尚未鋪設完全（回傳 `null`），採用直線歐幾里得幾何距離 $\times 1.35$ 曼哈頓轉向補償係數作為備援估算。
+- **決策分流邏輯**：
+  1. **回家行為（`dest.id === citizen.homeBuildingId`）**：
+     - 若 `citizen.vehicleRegistration.isUsingVehicle && vehicleId` $\implies$ 選擇 `drive`（開車回家，輸出在外停靠位置，提示需前置取車）；
+     - 若無在外登記車輛 $\implies$ 選擇 `walk`（走路回家）。
+  2. **非回家行為（`dest.id !== citizen.homeBuildingId`）**：
+     - 若步行距離 $\le 100\text{m}$ $\implies$ 選擇 `walk`（短途鄰里生活圈）；
+     - 若步行距離 $> 100\text{m}$（長途外出）：
+       - 出發地不在家（在工廠/在外）：若在外有登記車輛 $\implies$ `drive`；無車 $\implies$ `walk`；
+       - 出發地在家：檢查住宅 `availableVehicles.length > 0` 且 `citizen.age >= 18` $\implies$ 滿足則選 `drive`；不滿足（未成年或名下車輛全出差）則選 `walk`。
+- **延遲尋找車位原則**：出發時決策器不預先鎖定目的地車位，目的地路側車位交由執行器於車輛抵達終點前就近動態檢索。
+
+#### 57.3 市民偏好標籤清理與向下相容
+- 自 `CitizenProfile` 與 `src/types/citizen.ts` 完全移除 `TransitPreference`。
+- `BuildingTooltip` 移除個資卡上的通勤偏好標籤。
+- `CitizenManager.decideCitizenTravel` 重構為以 `TravelModeEvaluator.evaluate` 為底層核心之調度入口，兼顧舊系統向下相容。
+
+---
+
+### 五十八、 狀態機任務列隊最早執行時間機制與全城三系統通用架構 (Round 65)
+
+#### 58.1 時間窗口抽象介面 (`BaseTaskItem` 與 `BaseTaskRule`)
+- **雙邊界時間窗口模型（Time Window）**：
+  任務有效性由 $[T_{\text{earliest}}, T_{\text{latest}}]$ 雙邊界決定：
+  - $T_{\text{earliest}}$ (`earliestStartVirtualMin`)：最早執行時間。若為 `null` 代表無生效延遲（立即生效）；若數值大於當前遊戲分鐘，表示預約或尚未到期。
+  - $T_{\text{latest}}$ (`latestAcceptVirtualMin`)：截止時間。若為 `null` 代表無期限；若數值小於當前遊戲分鐘，表示已逾期。
+- **介面定義 (`src/types/common.ts`)**：
+  ```typescript
+  export interface BaseTaskItem<TType = string> {
+    id: string;
+    type: TType;
+    priority: number; // 1 ~ 100
+    createdAtVirtualMin: number;
+    earliestStartVirtualMin: number | null;
+    latestAcceptVirtualMin: number | null;
+    payload?: unknown;
+  }
+  ```
+
+#### 58.2 非阻塞優先度調度演算法 (`processTaskQueue`)
+- **生命週期判斷矩陣**：
+  1. **逾期判定 (`isTaskExpired`)**：
+     $$T_{\text{curr}} > T_{\text{latest}} \implies \text{從列隊永久移除}$$
+  2. **就緒判定 (`isTaskReady`)**：
+     $$T_{\text{earliest}} = \text{null} \lor T_{\text{curr}} \ge T_{\text{earliest}} \implies \text{允許分派執行}$$
+  3. **未就緒處理**：
+     $$T_{\text{curr}} < T_{\text{earliest}} \implies \text{跳過本次執行，保留於列隊中等待未來 Tick}$$
+- **非阻塞（Non-blocking）防死鎖排序**：
+  若直接取出最高優先度任務執行，可能因該任務為「未來預約行程」而阻塞後續已就緒的低優先度待辦事項。
+  調度器採三步安全管線：
+  ```typescript
+  // 1. 主動清理已逾期任務
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (this.isTaskExpired(queue[i], currentVirtualMin)) queue.splice(i, 1);
+  }
+
+  // 2. 僅挑選已就緒任務 (isTaskReady)
+  const readyTasks = queue.filter((t) => this.isTaskReady(t, currentVirtualMin));
+
+  // 3. 依優先度由高到低評估執行快照
+  for (const task of readyTasks) {
+    if (!queue.some((t) => t.id === task.id)) continue;
+    this.dispatchEvent(entity, { type: 'EXECUTE_TASK', task, currentVirtualMin }, context);
+  }
+  ```
+
+#### 58.3 全城三系統（市民、住宅、工業區）狀態機全面普及
+- **市民 (`CitizenProfile` / `CitizenStateMachine`)**：
+  - 任務類別：`FIND_JOB`（擴充支援 `earliestStartVirtualMin`）。
+  - 未來可無痛掛載上班作息預約、看診娛樂預訂，或找工作失敗後之指數退避冷卻（Backoff Cooldown）。
+- **住宅 (`ResidentialProfile` / `ResidentialStateMachine`)**：
+  - 任務類別：`MAINTENANCE`（預留）。
+  - `ResidentialProfile.taskQueue` 於 `createDefaultProfile` 自動初始化為空陣列。
+  - 狀態機掛載 `handleSharedResidentialTaskEvent`，支援住宅例行修繕、租稅結算等時間排程。
+- **工業區 (`IndustrialLowProfile` / `IndustrialStateMachine`)**：
+  - 任務類別：`RESTOCK_MATERIALS`、`SHIP_PRODUCTS`、`MAINTENANCE`。
+  - `IndustrialLowProfile.taskQueue` 於 `createDefaultProfile` 自動初始化。
+  - 支援工廠週期性叫料、出貨物流貨車調度與設備維護。
+
+---
+
+### 五十九、 舊上班機制完整去除與新狀態機／出行方式純決策系統架構收斂 (Round 66)
+
+#### 59.1 清理背景與架構原則
+在導入「市民狀態機任務列隊系統（雙邊界時間窗口、優先度調度）」與「出行方式純決策器（`TravelModeEvaluator`）」後，早期為開發者面板測試設計的過渡上班函式（如強行切換狀態、手動借還車、直接假設目的地為工廠之邏輯）產生了架構冗餘與雙軌衝突。依開發者指示，全面剔除舊上班機制與過渡回調，使系統回歸純淨單一管線。
+
+#### 59.2 移除的過渡介面與方法清冊
+1. **型別層（[`src/types/building.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/building.ts)、[`src/types/citizen.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)）**：
+   - 移除 `TravelDecisionOptions`：舊出行手動傳參（`forceMode`、`originBuildingId`、`destinationBuildingId`、`purpose`）。
+   - 移除 `TravelDecisionResult`：舊出行回傳值（改以 `TravelModeEvaluator` 輸出的純計算 `TravelDecisionPlan` 替代）。
+   - 移除 `CitizenNeeds.commuteSatisfaction`：早期未實作且未讀取之通勤舒適度指標。
+2. **市民管理器（[`src/simulation/CitizenManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts)）**：
+   - 移除 `decideCitizenTravel`：舊出行手動方法（其內部強制將市民切換為 `Traveling` 狀態並扣除住宅車輛，繞過狀態機任務列隊）。
+   - 移除 `returnCitizenToResidence`：舊手動返家方法。
+   - 移除 `recallAllCitizensToResidence`：舊開發者面板一鍵召回上班族方法。
+   - 移除 `CitizenManagerSyncHooks.onCommuteStateChanged` 及其在 `stepPeriodicSimulation` 內之呼叫。
+   - 保留並公開 `checkoutVehicle(citizen, homeBuilding, vehicle)` 與 `returnVehicleToHome(citizen, homeBuilding, reParkAtHome)` 作為未來狀態機出行執行器操作住宅車輛借還的標準原子窗口。
+3. **建築管理器與 UI 層（[`src/systems/BuildingManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/systems/BuildingManager.ts)、[`src/ui/DevMenu.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts)）**：
+   - 刪除 `BuildingManager` 中轉發 `decideCitizenTravel`、`returnCitizenToResidence`、`recallAllCitizensToResidence` 之全部多餘方法。
+   - 刪除 `onCommuteStateChanged` 與 `setOnCommuteStateChangedCallback`。
+   - 刪除 `DevMenu` 中 `setOnCommuteStateChangedCallback` 的綁定。
+
+#### 59.3 新狀態機與純決策系統對接標準
+- **決策階段**：調用 `TravelModeEvaluator.evaluate(citizen, origin, dest, context)` 或 `CitizenManager.evaluateCitizenTravel(...)`，產出包含推薦模式（`drive` / `walk`）、路網步行距離、停放位置與選用車輛之無副作用評估結果。
+- **調度階段**：由狀態機以任務列隊（`taskQueue`）驅動，結合 `earliestStartVirtualMin`（最早出發時間）與優先度，在就緒時觸發出發事件，再委派專職執行器（步行導航或開車複合旅程）推進實體世界移動。
+
+---
+
+### 六十、 上班系統鋪墊——低密度工業區最早上班時間（06:00）、市民最早上班時間與入職寫入機制 (Round 67)
+
+#### 60.1 需求背景與核心目標
+為後續實作完整的「市民上班任務狀態機調度與出行決策」奠定精確前置數據基礎：
+1. 工業建築需具備營業或開工之作息基準，其中「低密度工業區」的最早上班時間統一設定為 `06:00`。
+2. 市民個人檔案需具備最早上班時間欄位，未入職前為 `undefined`。
+3. 當市民經由求職媒合或調派入職時，必須透過單一事實來源窗口，將其所屬工作地點（低密度工業區）的最早上班時間同步寫入市民個人檔案；解僱/離職時清除回復。
+
+#### 60.2 資料結構與型別擴充
+- **低密度工業區（[`IndustrialLowProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/industrial.ts)）**：
+  ```typescript
+  export interface IndustrialLowProfile {
+    ...
+    // 工業區最早上班時間（例如 '06:00'，低密度工業區預設為 '06:00'）
+    earliestWorkTime: string;
+    ...
+  }
+  ```
+- **市民個資（[`CitizenProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)）**：
+  ```typescript
+  export interface CitizenProfile {
+    ...
+    // 工作地點建築 ID（若有入職）
+    workBuildingId?: EntityId;
+    /**
+     * 市民個人最早上班時間（例如 '06:00'）
+     * 入職時由工作地點（如低密度工業區）之 profile 寫入市民 profile；未就業或離職時為 undefined
+     */
+    earliestWorkTime?: string;
+    ...
+  }
+  ```
+
+#### 60.3 預設常數與工廠建造初始化
+- 於 [`src/simulation/IndustrialStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/IndustrialStateMachine.ts) 定義標準常數：
+  ```typescript
+  export const DEFAULT_LOW_INDUSTRIAL_EARLIEST_WORK_TIME = '06:00';
+  ```
+- 在 `IndustrialStateMachine.createDefaultProfile` 構造時：
+  - 若建築密度為 `Low`，`earliestWorkTime` 預設賦值為 `'06:00'`。
+  - 同時支援外部自定義排班時間輸入。
+  - 當地圖建造低密度工業建築（`BuildingManager.createBuilding`）時，產出之狀態檔案立即具備 `'06:00'` 最早上班時間。
+
+#### 60.4 市民僱傭關係單一窗口原子性寫入與清除
+- **入職寫入（[`CitizenManager.assignWorkerToFactory`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts)）**：
+  ```typescript
+  public assignWorkerToFactory(citizen: CitizenProfile, factory: PlacedBuilding): boolean {
+    if (!factory.industrialProfile) return false;
+    if (!IndustrialStateMachine.hireWorker(factory.industrialProfile, citizen.id)) {
+      return false;
+    }
+    citizen.workBuildingId = factory.id;
+    citizen.earliestWorkTime = factory.industrialProfile.earliestWorkTime;
+    this.hooks.onBuildingStateChanged?.(factory);
+    return true;
+  }
+  ```
+- **解僱/離職清除（[`CitizenManager.unassignWorkerFromFactory`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts)）**：
+  ```typescript
+  public unassignWorkerFromFactory(
+    citizen: CitizenProfile,
+    buildings: Map<string, PlacedBuilding>
+  ): boolean {
+    if (!citizen.workBuildingId) return false;
+    const factory = buildings.get(citizen.workBuildingId);
+    if (factory?.industrialProfile) {
+      IndustrialStateMachine.fireWorker(factory.industrialProfile, citizen.id);
+      this.hooks.onBuildingStateChanged?.(factory);
+    }
+    citizen.workBuildingId = undefined;
+    citizen.earliestWorkTime = undefined;
+    return true;
+  }
+  ```
+
+#### 60.5 測試驗證涵蓋
+- 建立專屬單元測試腳本 [`scratch/test_work_time_mechanism.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/scratch/test_work_time_mechanism.ts)：
+  1. 測試低密度工業工廠 `createDefaultProfile` 預設值為 `'06:00'`，且支援自定義時間。
+  2. 測試新生成市民 `earliestWorkTime` 初始為 `undefined`。
+  3. 測試市民入職工廠後，市民之 `earliestWorkTime` 精準寫入為工廠的 `earliestWorkTime`（`'06:00'`）。
+  4. 測試解僱/離職後，市民之 `earliestWorkTime` 恢復為 `undefined` 且工作 ID 清除。
+- 同步更新回歸測試 [`scratch/test_pedestrian_citizen_managers.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/scratch/test_pedestrian_citizen_managers.ts)，並確認全城狀態機及任務列隊 100% 通過。
+
+
+
+
+
+
+---
+
+### 六十一、 全城三系統狀態機（市民、住宅、工業區）複合任務微觀管線架構（Pipeline Session）(Round 68)
+
+#### 61.1 架構背景與核心目標
+在城市模擬中，宏觀活動任務（如市民上班、住宅定期修繕、工廠進出貨物流）本質上是由多個連續的微觀原子子任務（如：決策運具、步行取車、開車循線、停車入位、走入大門、打卡註冊）構成的複合任務包（Composite Task）。
+若直接在實體 Profile 中維護一整個靜態待辦陣列，會引發嚴重的「早期綁定 (Early Binding)」問題（如出發前鎖定之車位在抵達時已遭佔用）。
+因此，本輪確立並實作了「**宏觀任務列隊調度 ＋ 微觀階段管線推進（Pipeline Session）**」雙軌架構，並全面應用於**市民**、**住宅**與**工業區**三大狀態機。
+
+#### 61.2 通用基礎型別定義（[`src/types/common.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/common.ts)）
+```typescript
+export interface BasePipelineSession<TTaskType = string, TStage = string> {
+  taskId: string;
+  taskType: TTaskType;
+  currentStage: TStage;
+  startedAtVirtualMin: number;
+  stageStartedAtVirtualMin: number;
+  payload?: Record<string, any>;
+}
+
+export interface PipelineAdvanceResult<TStage = string> {
+  success: boolean;
+  previousStage: TStage;
+  currentStage: TStage;
+  isCompleted?: boolean;
+}
+```
+
+#### 61.3 市民系統實作（[`src/types/citizen.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts) 與 [`src/simulation/CitizenStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenStateMachine.ts)）
+1. **任務類型擴充**：`CitizenTaskType = 'FIND_JOB' | 'COMMUTE_TO_WORK' | 'COMMUTE_TO_HOME'`。
+2. **出行微觀階段定義**：
+   - `EVALUATE_MODE`（決策運具）
+   - `WALK_TO_VEHICLE`（步行取車）
+   - `DRIVING_TO_DEST`（開車巡航）
+   - `SEARCHING_PARKING`（就近找車位）
+   - `WALK_TO_ENTRANCE`（下車走向大門）
+   - `ENTER_BUILDING`（進屋銷毀模型、更新人數與註冊狀態）
+3. **資料掛載**：`CitizenProfile.activePipeline?: CitizenPipelineSession`。
+4. **狀態機管理方法**：
+   - `CitizenStateMachine.startPipeline(...)`
+   - `CitizenStateMachine.advancePipelineStage(...)`
+   - `CitizenStateMachine.completePipeline(...)`
+   - `CitizenStateMachine.cancelPipeline(...)`
+   - `CitizenStateMachine.getActivePipeline(...)`
+5. **任務規則連動**：`COMMUTE_TO_WORK` 執行時啟動微觀管線，初始為 `EVALUATE_MODE`，宏觀狀態無縫轉移為 `CommutingToWork`。
+
+#### 61.4 住宅系統實作（[`src/types/residential.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/residential.ts) 與 [`src/simulation/ResidentialStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/ResidentialStateMachine.ts)）
+1. **住宅複合微觀階段定義 (`ResidentialStage`)**：
+   - `INSPECTING`（屋況巡檢） $\to$ `ORDERING_PARTS`（叫料叫修） $\to$ `REPAIRING`（工班施工） $\to$ `COMPLETED`（驗收完工）
+2. **資料掛載**：`ResidentialProfile.activePipeline?: ResidentialPipelineSession`。
+3. **狀態機管理方法**：支援標準 `startPipeline`、`advancePipelineStage`、`completePipeline`、`cancelPipeline`、`getActivePipeline`。
+4. **任務規則連動**：`MAINTENANCE` 執行時啟動微觀管線，初始為 `INSPECTING`。
+
+#### 61.5 工業系統實作（[`src/types/industrial.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/industrial.ts) 與 [`src/simulation/IndustrialStateMachine.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/IndustrialStateMachine.ts)）
+1. **工業複合微觀階段定義 (`IndustrialStage`)**：
+   - **原料進貨**：`ORDER_MATERIALS` $\to$ `DISPATCH_SUPPLY_TRUCK` $\to$ `LOADING_SUPPLIES` $\to$ `TRUCK_RETURNING` $\to$ `UNLOAD_TO_STORAGE`
+   - **產品出貨**：`PREPARE_SHIPMENT` $\to$ `TRUCK_DELIVERY` $\to$ `DELIVERY_SETTLEMENT`
+   - **設備維護**：`INSPECT_EQUIPMENT` $\to$ `SERVICING` $\to$ `RESUME_PRODUCTION`
+2. **資料掛載**：`IndustrialLowProfile.activePipeline?: IndustrialPipelineSession`。
+3. **狀態機管理方法**：支援標準 `startPipeline`、`advancePipelineStage`、`completePipeline`、`cancelPipeline`、`getActivePipeline`。
+4. **任務規則連動**：`RESTOCK_MATERIALS`、`SHIP_PRODUCTS`、`MAINTENANCE` 執行時啟動各自專屬管線。
+
+#### 61.6 專屬單元與整合測試驗證
+建立專屬測試腳本 [`scratch/test_pipeline_architecture.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/scratch/test_pipeline_architecture.ts)：
+1. 測試市民 `COMMUTE_TO_WORK` 任務入隊、宏觀出發、微觀 6 階段完整流轉、到達工廠打卡入屋、模型銷毀與 session 清除。
+2. 測試住宅區 `MAINTENANCE` 任務入隊、巡檢到完工之 4 階段推進與 session 清除。
+3. 測試工業區 `RESTOCK_MATERIALS` 任務入隊、下單、派遣貨車、裝載、返廠卸貨之 5 階段推進、庫存原料累加與 session 清除。
+全數測試 100% 通過，且既有 9 支測試回歸 0 錯誤。

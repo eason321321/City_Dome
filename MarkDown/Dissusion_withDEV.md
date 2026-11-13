@@ -1469,3 +1469,303 @@
 4. **移除測試上班按鈕與呈現工作狀態**：
    - 徹底移除開發者面板內 `#dev-commute-test-btn`、`#dev-commute-return-btn`、`#dev-commute-log` 及 `testRandomCitizenCommute`，並於 [`DevMenu`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/DevMenu.ts) 與 [`BuildingTooltip`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildingTooltip.ts) 清楚呈現市民就職公司與待業／找工作中狀態。
 5. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+
+
+---
+
+## [2026-11-12] 第 61 輪作業討論與定案：全面收斂至 `Profile + Shared StateMachine` 單一事實來源架構（路線 A）
+
+### 一、 前置備份與開發節奏共識
+1. **變更前 Git 里程碑建立**：動工路線 A 前，已先提交並推送 Commit `9d0c8ce` 至 GitHub `origin/main`；完成路線 A 重構後依指示**不建立新 GIT 版本**。
+2. **全面收斂原則（路線 A）**：
+   - [`PlacedBuilding`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/building.ts) 專職擔任「世界座標、3D 網格、佔地與聯外道路外殼」，移除所有舊業務統計與名單欄位（`registeredResidents`、`currentOccupants`、`isCoLiving`、`residents`、`vehicles`、`employedWorkerIds`）。
+   - 所有業務資料統一收斂至對應之純資料 `*Profile`（[`CitizenProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts)、[`ResidentialProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/residential.ts)、[`IndustrialLowProfile`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/industrial.ts)），全面消滅外部 `syncCounts` / `syncWorkerCounts` / `syncResidentialProfileCounts`。
+3. **跨系統陷阱防護機制**：
+   - **僅存 ID、禁止物件嵌套與 3D 實體參考**：`ResidentialProfile` 只存 `residentIds: EntityId[]`、`IndustrialLowProfile` 只存 `employedWorkerIds: EntityId[]`，`ResidenceVehicle` 移除未用之 `mesh?: THREE.Group`，確保未來可安全進行 JSON 存檔序列化且無循環參考。
+   - **雙向關係單一變更窗口**：於 [`CitizenManager`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts) 建立 `assignWorkerToFactory` 與 `unassignWorkerFromFactory`，統一原子性同步市民端 `workBuildingId` 與工廠端 `employedWorkerIds`。
+   - **高低頻分層界線**：低頻業務與作息決策走 `Profile + Shared StateMachine`；高頻 60fps 空間移動維持由 `VehicleManager` / `PedestrianManager` / `ParkingManager` 專職處理。
+
+
+---
+
+## [2026-11-13] 第 62 輪作業討論與定案：自動入住需求生成規則（每 5 虛擬分鐘／30 人上限）與右上角市政顧問（小鳥）提示系統
+
+### 一、 核心需求與設計共識
+1. **人口計算與市民生成時機**：
+   - 城市顯示人口嚴格以**實際已遷入登記之市民**（`ResidentialProfile.residentIds`）為唯一事實來源，避免在途車輛造成「幽靈勞動力」。
+   - 市民個資（Profile：姓名、性別、年齡、通勤偏好）嚴格於**車輛抵達門口下車時才生成並同步登錄**。
+   - 考量後續將新增市民需求未被滿足時的「自主遷出機制」，因在途延遲導致總人口偶爾稍微超過 30 人（如 31~34 人）完全在允許與預期範圍內。
+2. **自動入住需求生成時鐘與門檻**：
+   - **推進時鐘**：由 `TimeManager` 虛擬遊戲時間推進，每 `5` 虛擬分鐘（在預設 0.75x 模擬速度下換算約為真實時間 `1.1` 秒）觸發一次。
+   - **生成規模**：隨機產生 1~5 人的住房需求，並立即進入三階段配對流程（合居 `joinExisting` 50% 擲骰 vs 建新房 `buildNew` 土地檢驗）。
+   - **門檻控制**：登記人口小於 30 時持續生成，達到 30 人時自動停止；若日後因遷出或拆除導致人口跌破 30 人，自動動態恢復生成。
+   - **佇列管理**：需求歷史清單限制最多保留 50 筆，避免長時間運行記憶體過載。
+3. **市政顧問（小鳥圖示）通知系統**：
+   - 位於遊戲畫面右上角（[`src/ui/CityAdvisor.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/CityAdvisor.ts)），常態展示精緻圓形小鳥按鈕，滑鼠懸停提供放大互動回饋（`scale(1.12)`）。
+   - 當顧問有話要說時觸發小鳥輕快跳動與擺動動畫（`chirping` 動畫），並於左側浮現氣泡對話框。
+   - **觸發條件**：住房需求因「無可用建地」配對失敗時觸發。
+   - **對話內容**：`市政顧問: 市長，我們需要規劃更多住宅土地供應市民入住`。
+   - **退場與防洗版機制**：
+     - 預設浮現 **4 秒** 後自動淡出消失。
+     - 相同文字的對話框具備真實世界計時 **10 秒** 冷卻時間，避免高頻短時間內重複彈出。
+   - **互動擴充性**：點選小鳥圖示可手動關閉或重聽最新市政建議，預留作為後續市民發聲管道之統一入口。
+4. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-13] 第 66 輪作業討論與定案：完整去除舊上班機制、過渡方法清理與新狀態機／出行決策系統就緒
+
+### 一、 核心指示與清理共識
+1. **完整去除舊上班機制**：
+   - 舊有的「隨機測試市民上班」、「手動強行切換出行」、「一鍵全城召回」等過渡機制已階段性完成任務，全面予以清除。
+   - 自型別定義清除 `TravelDecisionOptions`、`TravelDecisionResult` 與 `CitizenNeeds.commuteSatisfaction`。
+   - 自 `CitizenManager` 與 `BuildingManager` 清除 `decideCitizenTravel`、`returnCitizenToResidence`、`recallAllCitizensToResidence` 及 `onCommuteStateChanged` 回調。
+   - 車輛借出 `checkoutVehicle` 與歸還 `returnVehicleToHome` 調整為正式公開服務窗口，供後續狀態機與出行執行系統原子化操作住宅名下車輛。
+2. **未來新上班機制之定案路線**：
+   - 全面以**狀態機任務列隊系統**（`CitizenStateMachine.taskQueue`）以及**出行方式純決策系統**（`TravelModeEvaluator.evaluate`）為核心實現上班與日常通勤。
+   - 遵循無副作用決策器與分階段執行器解耦架構。
+3. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-13] 第 63 輪作業討論與定案：車道尺度與時空悖論研討、開發者工具「交通」分頁重構與暫時測試行人尋路系統
+
+### 一、 核心討論與設計共識
+1. **車道 2m 與移動速度／建築比例之合理性研討（討論 Round）**：
+   - **車速 vs 人速**：現行市區車速 6.5 m/s、行人 0.82 m/s，速比約 8:1，非常符合現實城鎮（車輛 35 km/h vs 行人 4.5 km/h）之自然比例。
+   - **時空悖論與日曆時鐘**：
+     - 若以遊戲世界座標 50 單位（25 格路塊）計算，行人走完耗時 61 模擬秒，換算遊戲內虛擬時間高達 **6 小時 6 分鐘**。
+     - 若以 1:10 模型微縮比例換算現實 50m（約 2.5 格路塊），耗時約 6.1 模擬秒，換算虛擬時間約 **37 分鐘**。
+     - 此現象為城市建造遊戲普遍存在的「交通動畫流暢度 vs 宏觀日曆時鐘快速推進」之經典妥協。
+   - **建築 vs 車道寬度**：2m 車道相對於目前最小住宅（1m×1m）視覺上偏寬，但為雙向車道、路邊停車與人行道防穿模之必要幾何間距。
+
+2. **開發者面板「交通」欄位整合（需求拍板）**：
+   - 開發者選單原 `🚗 車輛` 分頁更名為 `🚦 交通`。
+   - 內部提供 `🚗 車輛測試` 與 `🚶 行人測試` 雙子模式切換。
+   - 行人測試支援與車輛相同的「起點／終點」點選交互，自動尋找最短人行路徑並繪製導航光軌。
+
+3. **測試行人實體生命週期規格**：
+   - **純測試性質**：不應有自己的正式 `CitizenProfile` 資料，嚴禁註冊進市民管理器、不計入人口、不干擾常規搬入與通勤。
+   - **到達目的地停留 3 秒消失**：行人沿人行道、斑馬線與號誌走至目的地後，立即停止行走動作恢復站立姿態，在原地停留滿 3 秒後自動自 3D 場景容器中銷毀移除。
+   - **維護工具**：提供連續「🚶 行人出發」派送與「🗑️ 清除所有測試行人」即時清理工具。
+
+4. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-13] 第 66 輪作業討論與定案：完整去除舊上班機制、過渡方法清理與新狀態機／出行決策系統就緒
+
+### 一、 核心指示與清理共識
+1. **完整去除舊上班機制**：
+   - 舊有的「隨機測試市民上班」、「手動強行切換出行」、「一鍵全城召回」等過渡機制已階段性完成任務，全面予以清除。
+   - 自型別定義清除 `TravelDecisionOptions`、`TravelDecisionResult` 與 `CitizenNeeds.commuteSatisfaction`。
+   - 自 `CitizenManager` 與 `BuildingManager` 清除 `decideCitizenTravel`、`returnCitizenToResidence`、`recallAllCitizensToResidence` 及 `onCommuteStateChanged` 回調。
+   - 車輛借出 `checkoutVehicle` 與歸還 `returnVehicleToHome` 調整為正式公開服務窗口，供後續狀態機與出行執行系統原子化操作住宅名下車輛。
+2. **未來新上班機制之定案路線**：
+   - 全面以**狀態機任務列隊系統**（`CitizenStateMachine.taskQueue`）以及**出行方式純決策系統**（`TravelModeEvaluator.evaluate`）為核心實現上班與日常通勤。
+   - 遵循無副作用決策器與分階段執行器解耦架構。
+3. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-13] 第 64 輪作業討論與定案：市民移動交通方式純決策器（TravelModeEvaluator）重構、100m 鄰里生活圈門檻、移除交通偏好標籤與延遲尋位原則
+
+### 一、 核心需求與架構拍板
+1. **職責徹底分離（純決策器 vs 執行器）**：
+   - 建立獨立純決策模組 [`src/simulation/TravelModeEvaluator.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/TravelModeEvaluator.ts)，提供 100% 無副作用之純計算評估靜態方法 `evaluate(citizen, originBuilding, destBuilding, context)`。
+   - 決策器內部絕不觸碰狀態機轉換（`transitionTo`）、絕不扣減住宅可用車輛（`checkoutVehicle`）、絕不變更屋內人數。
+   - 僅於市民產生「宏觀移動意圖且交通方式未知」時調用；市民從出發地走向車輛位置取車、或上車後開往目的地等微觀子行為，屬於執行器推進階段，不重複調用決策器。
+2. **全面移除市民交通偏好標籤 (`transitPreference`)**：
+   - 自 [`src/types/citizen.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/types/citizen.ts) 刪除 `TransitPreference` 型別與 `CitizenProfile.transitPreference` 屬性。
+   - 自 [`src/simulation/CitizenManager.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/simulation/CitizenManager.ts) 移除市民生成時隨機骰交通偏好的程式碼。
+   - 自 [`src/ui/BuildingTooltip.ts`](file:///c:/Users/user/Documents/MYCODING/other/City_Dome/src/ui/BuildingTooltip.ts) 懸停卡片中移除「通勤偏好」標籤顯示。
+3. **客觀物理判斷策略（100m 鄰里生活圈界線）**：
+   - **回家行為（目的地為住家）**：
+     - 若市民身上有已登記在外出行之車輛（`isUsingVehicle: true`）$\implies$ 選擇**開車回家**（`drive`），輸出車輛停靠位置資訊，交由後續執行器調度「前置取車子行為」；
+     - 若無在外登記車輛 $\implies$ 選擇**走路回家**（`walk`）。
+   - **非回家行為**：
+     - 透過人行道路網計算真實步行距離：
+       - 若距離 $\le 100\text{m}$（約 10 個標準路塊）$\implies$ 選擇**走路**（`walk`，鄰里短途步行）；
+       - 若距離 $> 100\text{m}$（長途移動）：
+         - 若市民出發地不在家（在工廠/在外）：若在外有登記車輛則選**開車**（`drive`），無車則選**走路**（`walk`）；
+         - 若市民出發地在家：檢查住宅是否有閒置車輛且市民年齡 $\ge 18$ 歲，符合則選**開車**（`drive`），不符合（未成年或住宅無空車）則選**走路**（`walk`）。
+4. **現階段排除事項與延遲停車位尋找原則**：
+   - 依指示本輪暫不判定車道路網連通性，聚焦於人行道真實距離與運具歸屬決策。
+   - 停車位判定嚴格定為「**車輛抵達目的地後才開始就近尋找**」，出發時不預先鎖定目的地車位。
+5. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-13] 第 65 輪作業討論與定案：任務列隊最早執行時間（earliestStartVirtualMin）機制與全城三系統（市民、住宅、工業區）通用架構
+
+### 一、 核心需求與設計共識
+1. **任務時間窗口模型（Time Window: $[T_{\text{earliest}}, T_{\text{latest}}]$）**：
+   - 目前任務項目已具備 `latestAcceptVirtualMin`（截止時間；超過即過期移除，`null` 代表無期限）。
+   - 新增 `earliestStartVirtualMin`（最早執行時間；未達該時間前不分派執行，`null` 代表立即生效）。
+   - **過期（Deadline） vs 未生效（Earliest Start）行為嚴格區分**：
+     - 若 `currentVirtualMin > latestAcceptVirtualMin` $\implies$ 任務過期失效，自任務列隊中**徹底移除**。
+     - 若 `currentVirtualMin < earliestStartVirtualMin` $\implies$ 任務尚未就緒，**保留在列隊中，僅跳過本次執行**（不移除）。
+2. **非阻塞優先度調度（Non-blocking Priority Dispatch）**：
+   - 未來可能存在「高優先度（例如 90 分）但設定於晚上 20:00 生效」的行程預約。
+   - 狀態機在輪詢調度任務時，先過濾出「已達最早執行時間（`isTaskReady`）」的就緒任務，再依優先度（100 $\to$ 1）依序派發，**絕不允許未生效之高優先度任務卡死當前已生效之低優先度任務**。
+3. **擴大通用化至全城三系統（市民、住宅、工業區）**：
+   - 開發者拍板指示將此機制全面運用於全城所有狀態機系統：
+     - **市民 (`CitizenProfile` / `CitizenStateMachine`)**：行程預約、作息週期、找工作冷卻重試。
+     - **住宅 (`ResidentialProfile` / `ResidentialStateMachine`)**：例行維護、收租、修繕、定期檢查。
+     - **工業區 (`IndustrialLowProfile` / `IndustrialStateMachine`)**：定期進貨、出貨調度、機具設備維護。
+   - 在 `src/types/common.ts` 抽象出 `BaseTaskItem` 與 `BaseTaskRule` 通用基底介面，三者共享相同資料規格與排序調度邏輯。
+4. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+---
+
+## [2026-11-13] 第 66 輪作業討論與定案：完整去除舊上班機制、過渡方法清理與新狀態機／出行決策系統就緒
+
+### 一、 核心指示與清理共識
+1. **完整去除舊上班機制**：
+   - 舊有的「隨機測試市民上班」、「手動強行切換出行」、「一鍵全城召回」等過渡機制已階段性完成任務，全面予以清除。
+   - 自型別定義清除 `TravelDecisionOptions`、`TravelDecisionResult` 與 `CitizenNeeds.commuteSatisfaction`。
+   - 自 `CitizenManager` 與 `BuildingManager` 清除 `decideCitizenTravel`、`returnCitizenToResidence`、`recallAllCitizensToResidence` 及 `onCommuteStateChanged` 回調。
+   - 車輛借出 `checkoutVehicle` 與歸還 `returnVehicleToHome` 調整為正式公開服務窗口，供後續狀態機與出行執行系統原子化操作住宅名下車輛。
+2. **未來新上班機制之定案路線**：
+   - 全面以**狀態機任務列隊系統**（`CitizenStateMachine.taskQueue`）以及**出行方式純決策系統**（`TravelModeEvaluator.evaluate`）為核心實現上班與日常通勤。
+   - 遵循無副作用決策器與分階段執行器解耦架構。
+3. **版本規範**：嚴格遵守指示，**不建立 GIT 版本**。
+
+
+
+
+
+
+
+---
+
+## [2026-11-13] 第 68 輪作業架構討論：上班任務拆解為子任務包（複合任務／出行管線架構）與市民 Profile 狀態設計
+
+### 一、 討論背景與用戶核心洞察
+- 用戶在著手製作「上班任務活動」前，洞察到宏觀任務（如上班）實際上是由複數個「微觀子任務」組成的任務包：
+  1. 選擇交通方式（純決策）
+  2. 若開車：尋路至車輛停放處（行人尋路）
+  3. 移動前往目的地（車輛巡航 / 步行尋路）
+  4. 就近尋找車位停車（延遲決策停車任務）
+  5. 走入公司大門（行人尋路與模型隱藏）
+  6. 註冊上班狀態與打卡（業務狀態變更）
+- 且這些子任務可以被其他更上層任務（如：下班回家、休閒外出、採購）高度複用。
+- 用戶核心提問：
+  1. 這樣的「任務活動＝子任務包（Composite Task / Macro Task Package）」會是一個好架構嗎？是否有建議？
+  2. 要執行這套系統，是否需要在市民 Profile 裡面放置子任務順序清單之類的結構？
+
+### 二、 架構分析與共識結論
+
+#### 1. 架構評價：極度優秀，為模擬類遊戲 AI 的業界最佳實踐（HTN / Composite Task）
+- **高複用性 (High Reusability - DRY 原則)**：
+  - 城市模擬中，市民 50% 以上的動態行為皆為「出行 (Travel)」。
+  - 「上班 (GoToWork)」、「回家 (GoHome)」、「休閒 (GoToLeisure)」、「購物 (GoToShopping)」的出行核心完全一致，可統一抽象為**共用出行管線 (Travel Pipeline)**，避免重複造輪子。
+- **關注點徹底分離 (Separation of Concerns)**：
+  - **宏觀層 (Macro / Schedule)**：只負責決策「動機與目標」（例如：早上 8:00 前往工廠上班）。
+  - **微觀層 (Micro / Atomic Steps)**：只負責物理世界的執行（行人導航、車輛行駛、車位佔用、模型進屋隱藏）。
+- **容錯與動態降級 (Fault Tolerance)**：
+  - 在微觀執行中若發生異常（如臨近目的地時周圍車位已滿、或取車時發生佔用衝突），可在子任務包內部做局部重試或降級（如擴大範圍尋位、改停遠處步行），而不致摧毀市民整體的日常狀態機。
+
+#### 2. 市民 Profile 是否需要維護「子任務順序清單」？
+- **清單陣列模式 vs 階段驅動流水線 (Stage-Driven Pipeline)**：
+  - **一次性靜態清單（不推薦）**：若出發時就將「所有子步驟陣列」預先排入清單，容易引發「早期綁定 (Early Binding)」問題（例如出發前預訂的車位在抵達時已被搶走）。
+  - **階段驅動流水線 (推薦，最佳解法)**：
+    - 市民 Profile 保持輕量與純資料性質，不堆疊複雜的子任務佇列。
+    - Profile 內僅記錄宏觀狀態（如 `currentActivity: 'CommutingToWork'`）以及當前進行中的微觀階段（如 `travelStage: 'WALK_TO_CAR'`）或一個輕量的 `travelSession` 資料物件。
+    - 各微觀步驟採取**延遲決策 (Late Binding)** 與**事件推進 (Event-driven Step Chaining)**：完成上一步才觸發評估下一步的物理參數（如開車接近目標路段時才呼叫 `ParkingManager` 尋位）。
+
+#### 3. 與專案現有系統之無縫整合藍圖
+- 專案既有基礎建設已完備，各子任務具備清晰的執行器與服務：
+  - 步驟 1 (決策運具)：`TravelModeEvaluator.evaluate()`
+  - 步驟 2 & 5 (行人行走)：`PedestrianManager`（雙向立體人行道、斑馬線、號誌停等）
+  - 步驟 3 (車輛行駛)：`VehicleManager`（車道隊列、停止線、避障）
+  - 步驟 4 (就近停車)：`ParkingManager`（路邊車位動態搜尋與預約停靠）
+  - 步驟 6 (打卡進屋)：`CitizenStateMachine` + `BuildingManager`（更新房內人數、模型消失、轉移為 `AtWork`）
+- 透過統一的出行協調器（如 `CitizenTravelPipeline`），市民上班任務即可極致精簡地調度整套標準流程。
+
+
+
+### 三、 [第 68 輪深入討論] 子任務的具體安排、執行流轉與狀態機 10 虛擬分鐘頻率適應性
+
+#### 1. 當市民接受並執行 `GO_WORK` 後，子事件如何被安排與執行？
+- **宏觀狀態切換**：
+  市民任務列隊消費 `GO_WORK` 任務，狀態轉為 `CommutingToWork`。
+- **微觀執行模式（事件回調推進，非佇列排程）**：
+  子任務並非一次性排進市民個人的 `taskQueue`，而是由出行執行器（如 `TravelPipeline`）以**微觀階段（Stage）+ 事件驅動（Event/Callback-Driven）**流轉：
+
+```
+[GO_WORK 觸發] 
+       │
+       ▼
+【階段 1: 決策運具】(TravelModeEvaluator)
+       │
+   ┌───┴───────────────────────────────┐
+   │ [開車 drive]                      │ [走路 walk]
+   ▼                                   │
+【階段 2: 走去取車】(WALK_TO_CAR)      │
+   │ (PedestrianManager 導航行走)       │
+   │ 條件：抵達車旁 (onArrived)         │
+   ▼                                   │
+【階段 3: 開車巡航】(DRIVING_TO_DEST)  │
+   │ (VehicleManager 車道行駛)         │
+   │ 條件：接近目標路段 (onNearDest)    │
+   ▼                                   │
+【階段 4: 就近停車】(SEARCH_AND_PARK)  │
+   │ (ParkingManager 動態尋找車位)      │
+   │ 條件：停妥熄火 (onParked)          │
+   ▼                                   │
+   └───────────────────┬───────────────┘
+                       ▼
+【階段 5: 走入公司】(WALK_TO_ENTRANCE)
+   │ (PedestrianManager 導航至大門)
+   │ 條件：抵達建築入口 (onArrived)
+   ▼
+【階段 6: 註冊上班】(ENTER_BUILDING)
+   │ 1. 銷毀 3D 行人模型 (markModelDespawned)
+   │ 2. 工廠在崗人數 +1 (BuildingManager)
+   │ 3. 轉移狀態為 AtWork (CitizenStateMachine.transitionTo)
+   ▼
+[上班任務包圓滿閉環]
+```
+
+#### 2. 「每虛擬時間 10 分鐘執行一次狀態機」夠用嗎？
+- **核心結論：對宏觀排程「非常夠用且效能極高」，但微觀子任務不能依賴 10 分鐘輪詢，必須採「物理回調即時驅動」！**
+- **時間換算分析**：
+  - 專案定義：$1 \text{ 模擬秒} = 6 \text{ 虛擬分鐘}$（即 $10 \text{ 模擬秒} = 1 \text{ 虛擬小時}$）。
+  - 因此：$10 \text{ 虛擬分鐘} \approx 1.67 \text{ 真實秒}$。
+- **雙軌架構（Two-Tier Architecture）分工**：
+  1. **宏觀決策層（每 10 虛擬分鐘輪詢一次）**：
+     - 負責：判斷時間是否該發起上班（如 06:00 工廠開工）、檢查市民生理作息、出發逾期超時檢測與安全救援。
+     - 10 虛擬分鐘輪詢一次（約每 1.67 秒一次），計算量極低，即使全城有幾千位市民也能流暢跑滿 60 FPS。
+  2. **微觀物理層（每幀 60 FPS 物理推進 ＋ 事件回調 0 延遲銜接）**：
+     - 負責：行人行走、號誌停等、車輛開行、轉向排隊、抵達事件。
+     - **子任務間的切換絕不能等下一個 10 分鐘 Tick**（否則市民停好車後會在車裡呆坐 1.6 秒才下車）。
+     - 行人走到車旁 $\to$ 回調觸發 $\to$ **同幀（0 毫秒延遲）** 切換上車開走；車輛停入車位 $\to$ 回調觸發 $\to$ **同幀** 生成行人走進大門。
+  - **結論**：原有的「每 10 虛擬分鐘推進一次狀態機」作為**宏觀決策大腦**完全夠用；子任務的交接則由底層物理管理器透過**回調函式（Callbacks）**無縫接力！
+
+
+---
+
+## [2026-11-13] 第 69 輪架構討論：遷入專屬車位預約機制（行人路網尋找）與日常出行就近停車子任務機制（車道路網順向尋找）
+
+### 一、 用戶核心設計提案
+1. **遷入專屬車位預約機制 (Move-In Exclusive Reservation)**：
+   - 預約車位為遷入專屬特權，其他一般出行不使用預約。
+   - 市民媒合搬入（不論是新建入住或併入合居）新增前置先決條件：**必須成功預約到合法空車位**。
+   - 尋找演算法：從市民住家正面出發，調用「**行人尋路系統 (PedestrianNetwork)**」計算人行道真實連通與最近步行距離的空車格；即使距離較遠亦可，但必須保證步行可達且預約成功，方能完成搬入。
+2. **日常通勤就近停車子任務機制 (Nearby Parking Sub-Task for Commute)**：
+   - 上班、下班、休閒等非遷入出行，一律採用「**就近停車子任務**」（不提前預約，延遲至抵達目的地附近時觸發）。
+   - 尋找演算法：從車輛當前所在位置出發，調用「**車用道路尋路系統 (RoadNetwork Pathfinding)**」尋找距離目的地最近且順向可達之合法車位。
+   - 資源互斥性：檢索車位時，**嚴格排除已被遷入預約（`reservedSpots`）之車位**。
+
+### 二、 架構分析與評價回饋
+1. **設計評價：極度優質、真實且具備高遊戲性**：
+   - **生活真實性**：購屋/租房遷入必須有固定車位才落戶；日常出門上班/購物則是抵達目的地後先到先停公用路邊車位。兩者層次劃分非常清晰。
+   - **尋路系統選用精準**：
+     - 遷入看重「停好車後走回家、以及未來出門走去取車」的步行體驗，因此用「行人尋路系統」最為精確。
+     - 出行看重「車輛行駛中如何順向、不違規跨線停入路邊」，因此用「車用道路尋路系統」最符合物理交通法規。
+2. **關鍵工程考量與建議**：
+   - **效能優化 (Spatial Pruning + A*)**：先以空間距離取前 $N$ 個空位候選，再跑行人/車道 A*，避免全城窮舉。
+   - **車位滿載處理**：若全城車位已滿，遷入市民應進入等待車位狀態或流失，並反饋至城市日誌/面板。
+   - **車輛開出後之原車位歸屬**：討論市民日常開車上班後，住家原車位是否仍保留給該住宅？或是返家時亦就近尋找？

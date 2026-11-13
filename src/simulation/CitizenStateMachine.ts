@@ -1,11 +1,13 @@
 import {
   CitizenActivityState,
+  CitizenPipelineSession,
   CitizenProfile,
   CitizenTaskItem,
   CitizenTaskType,
+  CitizenTravelStage,
   TravelMode,
 } from '../types/citizen';
-import { EntityId } from '../types/common';
+import { BaseTaskRule, EntityId, PipelineAdvanceResult } from '../types/common';
 
 /**
  * 狀態機執行時傳入之外部世界服務上下文
@@ -27,33 +29,11 @@ export type CitizenStateEvent =
   | { type: 'CUSTOM'; name: string; payload?: unknown };
 
 /**
- * 單一任務類型之雙段條件與執行規則（入隊條件 ≠ 執行條件）
+ * 單一任務類型之雙段條件與執行規則（入隊條件 ≠ 執行條件，繼承 BaseTaskRule）
  */
-export interface CitizenTaskRule {
-  /** 預設優先度 (1 ~ 100，由低到高) */
-  defaultPriority: number;
-  /** 預設有效期限（遊戲虛擬分鐘；null 代表無期限） */
-  defaultValidDurationMin: number | null;
-  /** 入隊條件（除通用防重複檢查之外的專屬條件） */
-  canEnqueue: (
-    citizen: CitizenProfile,
-    currentVirtualMin: number,
-    context?: CitizenStateContext
-  ) => boolean;
-  /** 執行條件（除通用最後接受時間過期判斷之外的專屬條件；失敗則自列隊移除） */
-  canExecute: (
-    citizen: CitizenProfile,
-    task: CitizenTaskItem,
-    currentVirtualMin: number,
-    context?: CitizenStateContext
-  ) => boolean;
-  /** 執行動作：成功回傳 true（自列隊移除）；失敗回傳 false（保留於列隊等待下一輪優先度篩選） */
-  execute: (
-    citizen: CitizenProfile,
-    task: CitizenTaskItem,
-    context?: CitizenStateContext
-  ) => boolean;
-}
+export interface CitizenTaskRule
+  extends BaseTaskRule<CitizenProfile, CitizenTaskItem, CitizenStateContext> {}
+
 
 /**
  * 全城共用之任務規則定義表
@@ -71,6 +51,58 @@ export const CITIZEN_TASK_RULES: Record<CitizenTaskType, CitizenTaskRule> = {
     },
     execute(citizen, _task, context) {
       return context?.tryAssignNearestJob?.(citizen) ?? false;
+    },
+  },
+  COMMUTE_TO_WORK: {
+    defaultPriority: 80,
+    defaultValidDurationMin: 120,
+    canEnqueue(citizen) {
+      return Boolean(citizen.workBuildingId) && citizen.currentActivity === 'AtHome' && citizen.atHome;
+    },
+    canExecute(citizen) {
+      return (
+        Boolean(citizen.workBuildingId) &&
+        (citizen.currentActivity === 'AtHome' || citizen.currentActivity === 'CommutingToWork')
+      );
+    },
+    execute(citizen, task, context) {
+      if (!citizen.workBuildingId) return false;
+      const currentVirtualMin = context?.currentVirtualMin ?? task.createdAtVirtualMin;
+      // 啟動微觀出行管線，初始微觀子階段為 EVALUATE_MODE
+      CitizenStateMachine.startPipeline(
+        citizen,
+        task.id,
+        'COMMUTE_TO_WORK',
+        'EVALUATE_MODE',
+        currentVirtualMin,
+        { targetBuildingId: citizen.workBuildingId }
+      );
+      CitizenStateMachine.transitionTo(citizen, 'CommutingToWork', context);
+      return true;
+    },
+  },
+  COMMUTE_TO_HOME: {
+    defaultPriority: 70,
+    defaultValidDurationMin: 120,
+    canEnqueue(citizen) {
+      return citizen.currentActivity === 'AtWork';
+    },
+    canExecute(citizen) {
+      return citizen.currentActivity === 'AtWork' || citizen.currentActivity === 'CommutingToHome';
+    },
+    execute(citizen, task, context) {
+      const currentVirtualMin = context?.currentVirtualMin ?? task.createdAtVirtualMin;
+      // 啟動微觀出行管線，初始微觀子階段為 EVALUATE_MODE
+      CitizenStateMachine.startPipeline(
+        citizen,
+        task.id,
+        'COMMUTE_TO_HOME',
+        'EVALUATE_MODE',
+        currentVirtualMin,
+        { targetBuildingId: citizen.homeBuildingId }
+      );
+      CitizenStateMachine.transitionTo(citizen, 'CommutingToHome', context);
+      return true;
     },
   },
 };
@@ -104,7 +136,12 @@ function handleSharedTaskEvent(
     return;
   }
 
-  // 執行條件判斷：過期判斷 + 任務執行條件，任何一項失敗直接移出列隊
+  // 1. 若尚未達最早執行時間，跳過不執行且保留於列隊中（不移除）
+  if (!CitizenStateMachine.isTaskReady(task, currentVirtualMin)) {
+    return;
+  }
+
+  // 2. 執行條件判斷：過期判斷 + 任務執行條件，任何一項失敗直接移出列隊
   if (
     CitizenStateMachine.isTaskExpired(task, currentVirtualMin) ||
     !rule.canExecute(citizen, task, currentVirtualMin, context)
@@ -113,7 +150,7 @@ function handleSharedTaskEvent(
     return;
   }
 
-  // 執行事件任務：成功則移出列隊，失敗則保留於列隊等待下輪篩選
+  // 3. 執行事件任務：成功則移出列隊，失敗則保留於列隊等待下輪篩選
   const succeeded = rule.execute(citizen, task, context);
   if (succeeded) {
     removeTaskById(citizen, task.id);
@@ -286,6 +323,13 @@ export class CitizenStateMachine {
   }
 
   /**
+   * 檢查任務是否已就緒（已到達最早執行時間，或未設定 null）
+   */
+  public static isTaskReady(task: CitizenTaskItem, currentVirtualMin: number): boolean {
+    return task.earliestStartVirtualMin === null || currentVirtualMin >= task.earliestStartVirtualMin;
+  }
+
+  /**
    * 檢查任務是否已超過最後接受時間
    */
   public static isTaskExpired(task: CitizenTaskItem, currentVirtualMin: number): boolean {
@@ -296,14 +340,19 @@ export class CitizenStateMachine {
    * 嘗試將任務加入市民任務列隊：
    * 1. 通用防重複：任務列隊中若已有同類型任務，一律拒絕重複加入
    * 2. 任務專屬入隊條件檢查 (canEnqueue)
-   * 3. 寫入優先度 (1~100) 與最後接受時間，並依優先度由高到低排序
+   * 3. 寫入優先度 (1~100)、最早執行時間與最後接受時間，並依優先度由高到低排序
    */
   public static enqueueTask(
     citizen: CitizenProfile,
     type: CitizenTaskType,
     currentVirtualMin: number,
     context?: CitizenStateContext,
-    overrides?: { priority?: number; validDurationMin?: number | null; payload?: unknown }
+    overrides?: {
+      priority?: number;
+      earliestStartVirtualMin?: number | null;
+      validDurationMin?: number | null;
+      payload?: unknown;
+    }
   ): CitizenTaskItem | null {
     // 通用防重複檢查：避免任務清單重複分配相同任務
     if (citizen.taskQueue.some((t) => t.type === type)) {
@@ -322,11 +371,19 @@ export class CitizenStateMachine {
         ? overrides.validDurationMin
         : rule.defaultValidDurationMin;
 
+    const earliestStart =
+      overrides?.earliestStartVirtualMin !== undefined
+        ? overrides.earliestStartVirtualMin
+        : rule.defaultDelayMin !== undefined && rule.defaultDelayMin !== null
+        ? currentVirtualMin + rule.defaultDelayMin
+        : null;
+
     const item: CitizenTaskItem = {
       id: `task_${type}_${this.nextTaskSeq++}`,
       type,
       priority,
       createdAtVirtualMin: currentVirtualMin,
+      earliestStartVirtualMin: earliestStart,
       latestAcceptVirtualMin: validDuration !== null ? currentVirtualMin + validDuration : null,
       payload: overrides?.payload,
     };
@@ -338,6 +395,7 @@ export class CitizenStateMachine {
 
   /**
    * 依優先度由高到低（100 -> 1）處理市民任務列隊，同優先度先入先出：
+   * - 僅篩選出已就緒（已達最早執行時間，或無限制）之任務進行分派；未達時間之任務保留於列隊中跳過
    * - 若過期或執行條件失敗 -> 從列隊移除
    * - 若執行成功 -> 從列隊移除
    * - 若執行失敗 -> 保留於列隊等待下一輪優先度篩選
@@ -350,9 +408,22 @@ export class CitizenStateMachine {
     if (citizen.taskQueue.length === 0) return;
 
     this.sortTaskQueue(citizen);
-    // 取出本輪快照順序，確保每個任務本輪只評估一次（即使執行失敗留在列隊也不重複跑）
-    const roundSnapshot = [...citizen.taskQueue];
-    for (const task of roundSnapshot) {
+
+    // 1. 先主動清除逾期任務
+    for (let i = citizen.taskQueue.length - 1; i >= 0; i--) {
+      if (this.isTaskExpired(citizen.taskQueue[i], currentVirtualMin)) {
+        citizen.taskQueue.splice(i, 1);
+      }
+    }
+
+    // 2. 篩選出目前已就緒之任務（已達最早執行時間，或未設定限制）
+    const readyTasks = citizen.taskQueue.filter((task) =>
+      this.isTaskReady(task, currentVirtualMin)
+    );
+
+    // 3. 依優先度依序評估派發
+    for (const task of readyTasks) {
+      if (!citizen.taskQueue.some((t) => t.id === task.id)) continue;
       this.dispatchEvent(
         citizen,
         { type: 'EXECUTE_TASK', task, currentVirtualMin },
@@ -435,5 +506,93 @@ export class CitizenStateMachine {
     };
     citizen.currentVehicleId = undefined;
     citizen.currentTravelMode = undefined;
+  }
+
+  // =========================================================================
+  // 複合任務微觀管線會話管理 (Pipeline Session Management)
+  // =========================================================================
+
+  /**
+   * 啟動複合任務微觀管線會話：
+   * 建立 activePipeline 並將微觀子階段設為 initialStage，同時更新 payload
+   */
+  public static startPipeline(
+    citizen: CitizenProfile,
+    taskId: string,
+    taskType: CitizenTaskType,
+    initialStage: CitizenTravelStage,
+    currentVirtualMin: number,
+    payload?: Record<string, any>
+  ): CitizenPipelineSession {
+    const session: CitizenPipelineSession = {
+      taskId,
+      taskType,
+      currentStage: initialStage,
+      startedAtVirtualMin: currentVirtualMin,
+      stageStartedAtVirtualMin: currentVirtualMin,
+      payload: {
+        targetBuildingId: payload?.targetBuildingId ?? citizen.workBuildingId ?? citizen.homeBuildingId,
+        ...payload,
+      },
+    };
+    citizen.activePipeline = session;
+    return session;
+  }
+
+  /**
+   * 推進市民複合任務微觀管線至下一子階段（同幀 0 延遲或回調時調用）
+   */
+  public static advancePipelineStage(
+    citizen: CitizenProfile,
+    nextStage: CitizenTravelStage,
+    currentVirtualMin: number,
+    payloadUpdate?: Record<string, any>
+  ): PipelineAdvanceResult<CitizenTravelStage> {
+    const session = citizen.activePipeline;
+    if (!session) {
+      return { success: false, previousStage: nextStage, currentStage: nextStage, isCompleted: false };
+    }
+    const previousStage = session.currentStage;
+    session.currentStage = nextStage;
+    session.stageStartedAtVirtualMin = currentVirtualMin;
+    if (payloadUpdate) {
+      session.payload = { ...session.payload, ...payloadUpdate };
+    }
+    return { success: true, previousStage, currentStage: nextStage, isCompleted: false };
+  }
+
+  /**
+   * 完成複合任務微觀管線：
+   * 清除 activePipeline，並自任務列隊移除該宏觀任務
+   */
+  public static completePipeline(
+    citizen: CitizenProfile,
+    _context?: CitizenStateContext
+  ): boolean {
+    const session = citizen.activePipeline;
+    if (!session) return false;
+    removeTaskById(citizen, session.taskId);
+    citizen.activePipeline = undefined;
+    return true;
+  }
+
+  /**
+   * 中止／取消複合任務微觀管線（若發生異常、道路中斷或降級重置）
+   */
+  public static cancelPipeline(
+    citizen: CitizenProfile,
+    _reason?: string,
+    _context?: CitizenStateContext
+  ): void {
+    if (!citizen.activePipeline) return;
+    removeTaskById(citizen, citizen.activePipeline.taskId);
+    citizen.activePipeline = undefined;
+  }
+
+  /**
+   * 取得市民當前微觀管線會話
+   */
+  public static getActivePipeline(citizen: CitizenProfile): CitizenPipelineSession | undefined {
+    return citizen.activePipeline;
   }
 }

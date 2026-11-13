@@ -1,14 +1,14 @@
 import * as THREE from 'three';
-import { CitizenModelFactory } from '../rendering/CitizenModelFactory';
+import { CitizenModelFactory, CitizenGender } from '../rendering/CitizenModelFactory';
 import { RoadNetwork } from '../systems/RoadNetwork';
-import { PedestrianWaypoint } from '../systems/PedestrianNetwork';
+import { PedestrianWaypoint, PedestrianPathResult } from '../systems/PedestrianNetwork';
 import { CitizenProfile } from '../types/citizen';
 import { CitizenStateMachine } from './CitizenStateMachine';
 
 export interface ActivePedestrian {
   id: string;
   buildingId: string;
-  profile: CitizenProfile;
+  profile?: CitizenProfile;
   mesh?: THREE.Group;
   spawnDelay: number;
   currentWaypointIndex: number;
@@ -23,6 +23,8 @@ export interface ActivePedestrian {
   isAlighted: boolean;
   hasEnteredHouse: boolean;
   onArrivedDestination?: () => void;
+  isTest?: boolean;
+  arrivedWaitTimer?: number;
 }
 
 export type MovingInPedestrian = ActivePedestrian;
@@ -116,13 +118,15 @@ export class PedestrianManager {
         if (ped.spawnDelay <= 0) {
           ped.isAlighted = true;
           const mesh = CitizenModelFactory.createCitizen({
-            gender: ped.profile.gender,
+            gender: ped.profile ? ped.profile.gender : 'male',
             variant: Math.floor(Math.random() * 3),
           });
           mesh.position.copy(ped.waypoints[0]);
           this.pedestrianContainer.add(mesh);
           ped.mesh = mesh;
-          CitizenStateMachine.markModelSpawned(ped.profile);
+          if (ped.profile) {
+            CitizenStateMachine.markModelSpawned(ped.profile);
+          }
         }
         continue;
       }
@@ -200,7 +204,31 @@ export class PedestrianManager {
           1.0
         );
       } else {
-        // 抵達終點：移除模型並標記消失，最後才觸發抵達回調（嚴格確保 AT_home 等狀態轉移順序）
+        // 抵達終點處理
+        if (ped.isTest) {
+          // 測試行人：停止行走動作、恢復站姿、停留 3 秒後自動銷毀消失，不產生正式市民記錄
+          ped.isCrossingCrosswalk = false;
+          ped.crossingIntersectionKey = undefined;
+          ped.crossingArm = undefined;
+          ped.isWaitingLight = false;
+          if (ped.mesh) {
+            CitizenModelFactory.resetCitizenPose(ped.mesh);
+          }
+          ped.arrivedWaitTimer = (ped.arrivedWaitTimer ?? 0) + deltaTime;
+          if (ped.arrivedWaitTimer >= 3.0) {
+            if (ped.mesh) {
+              this.pedestrianContainer.remove(ped.mesh);
+              ped.mesh = undefined;
+            }
+            if (ped.onArrivedDestination) {
+              ped.onArrivedDestination();
+            }
+            this.activePedestrians.splice(i, 1);
+          }
+          continue;
+        }
+
+        // 常規市民抵達終點：移除模型並標記消失，最後才觸發抵達回調（嚴格確保 AT_home 等狀態轉移順序）
         ped.isCrossingCrosswalk = false;
         ped.crossingIntersectionKey = undefined;
         ped.crossingArm = undefined;
@@ -210,10 +238,77 @@ export class PedestrianManager {
           this.pedestrianContainer.remove(ped.mesh);
           ped.mesh = undefined;
         }
-        CitizenStateMachine.markModelDespawned(ped.profile);
+        if (ped.profile) {
+          CitizenStateMachine.markModelDespawned(ped.profile);
+        }
 
         if (ped.onArrivedDestination) {
           ped.onArrivedDestination();
+        }
+        this.activePedestrians.splice(i, 1);
+      }
+    }
+  }
+
+  /**
+   * 生成一位測試行人實體（專為開發者選單測試設計，無正式 Profile，到達目的地後停留 3 秒消失）
+   */
+  public spawnTestPedestrian(
+    route: PedestrianPathResult,
+    options?: {
+      gender?: CitizenGender;
+      speed?: number;
+      onArrived?: () => void;
+    }
+  ): ActivePedestrian | null {
+    if (!route || route.waypoints.length < 1) return null;
+
+    const gender: CitizenGender = options?.gender ?? (Math.random() < 0.5 ? 'male' : 'female');
+    const mesh = CitizenModelFactory.createCitizen({
+      gender,
+      variant: Math.floor(Math.random() * 3),
+    });
+    mesh.position.copy(route.waypoints[0]);
+    if (route.waypoints.length > 1) {
+      const dir = new THREE.Vector3().subVectors(route.waypoints[1], route.waypoints[0]);
+      dir.y = 0;
+      if (dir.lengthSq() > 0.0001) {
+        mesh.rotation.y = Math.atan2(dir.x, dir.z);
+      }
+    }
+    this.pedestrianContainer.add(mesh);
+
+    const testPed: ActivePedestrian = {
+      id: `test_ped_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      buildingId: 'dev_test',
+      isTest: true,
+      mesh,
+      spawnDelay: 0,
+      currentWaypointIndex: 1,
+      waypoints: route.waypoints,
+      routeWaypoints: route.routeWaypoints,
+      speed: (options?.speed ?? 1.0) * PedestrianManager.WALK_SPEED_SCALE,
+      walkTimer: 0,
+      isAlighted: true,
+      hasEnteredHouse: false,
+      arrivedWaitTimer: 0,
+      onArrivedDestination: options?.onArrived,
+    };
+
+    this.activePedestrians.push(testPed);
+    return testPed;
+  }
+
+  /**
+   * 清除所有正在道路上行走的測試行人實體
+   */
+  public clearAllTestPedestrians(): void {
+    for (let i = this.activePedestrians.length - 1; i >= 0; i--) {
+      const ped = this.activePedestrians[i];
+      if (ped.isTest) {
+        if (ped.mesh) {
+          this.pedestrianContainer.remove(ped.mesh);
+          ped.mesh = undefined;
         }
         this.activePedestrians.splice(i, 1);
       }
@@ -226,7 +321,7 @@ export class PedestrianManager {
   public removePedestriansByCitizenId(citizenId: string): void {
     for (let i = this.activePedestrians.length - 1; i >= 0; i--) {
       const ped = this.activePedestrians[i];
-      if (ped.profile.id === citizenId) {
+      if (ped.profile?.id === citizenId) {
         if (ped.mesh) {
           this.pedestrianContainer.remove(ped.mesh);
           ped.mesh = undefined;
@@ -246,13 +341,15 @@ export class PedestrianManager {
         this.pedestrianContainer.remove(ped.mesh);
         ped.mesh = undefined;
       }
-      CitizenStateMachine.markModelDespawned(ped.profile);
+      if (ped.profile) {
+        CitizenStateMachine.markModelDespawned(ped.profile);
+      }
     }
     this.activePedestrians = [];
   }
 
   public findActivePedestrianByCitizenId(citizenId: string): ActivePedestrian | undefined {
-    return this.activePedestrians.find((p) => p.profile.id === citizenId);
+    return this.activePedestrians.find((p) => p.profile?.id === citizenId);
   }
 
   public getActivePedestrians(): ActivePedestrian[] {

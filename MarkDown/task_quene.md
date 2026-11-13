@@ -57,9 +57,16 @@
 
 不建立GIT 版本
 
-製作 上班判定以及 居民工作判定
+- [x] 完整去除原本舊的上班機制（已清除舊 `decideCitizenTravel`、`returnCitizenToResidence`、`recallAllCitizensToResidence`、`onCommuteStateChanged` 及相關型別，全面轉由狀態機系統與出行決策系統實現）
+- [x] 低密度工業區 profile 最早上班時間（預設 06:00）、市民 profile 最早上班時間與入職時自動寫入機制（已完成 IndustrialLowProfile.earliestWorkTime、CitizenProfile.earliestWorkTime 與 assignWorkerToFactory 原子性寫入與解僱清除）
+- [ ] 製作 上班判定以及 居民工作判定（基於 CitizenStateMachine.taskQueue 與 TravelModeEvaluator）
 狀態機在單輪的檢查是: 先尋找是否有任何事件需要被加入，然後最後再執行優先度最高的任務嗎?
 
 跟遊戲內虛擬時間有關的 走路速度以及行車速度 有與 src/simulation/TimeManager.ts 內的維護累計虛擬總分鐘系統 有關嗎? 應為走路速度以及行車速度應該是要受到遊戲內虛擬時間速度影響而不是真實世界時間
 
 ⏳ 找工作中、🔍 待業 差別
+
+![alt text](image.png) 位置對調且預設改為"框選模式"
+
+未完成: 就近停車子任務
+未完成: 市民間入時多一個判斷: 有可預約之空車位且預約成功

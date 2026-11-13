@@ -10,6 +10,8 @@ import { ParkingManager } from '../simulation/ParkingManager';
 import { CitizenModelFactory, CitizenGender } from '../rendering/CitizenModelFactory';
 import { RoadMarkingFactory } from '../rendering/RoadMarkingFactory';
 import { TimeManager } from '../simulation/TimeManager';
+import { PedestrianManager } from '../simulation/PedestrianManager';
+import { PedestrianNode, PedestrianPathResult } from '../systems/PedestrianNetwork';
 
 /**
  * 開發者工具箱 (DevMenu)
@@ -33,6 +35,7 @@ export class DevMenu {
   private buildingManager: BuildingManager | null = null;
   private parkingManager: ParkingManager | null = null;
   private timeManager: TimeManager | null = null;
+  private pedestrianManager: PedestrianManager | null = null;
 
   // UI 元素
   private toggleButton!: HTMLButtonElement;
@@ -51,16 +54,21 @@ export class DevMenu {
   private isParkingModeActive: boolean = false;
   private ghostCarMesh: THREE.Group | null = null;
 
-  // --- 車輛道路測試狀態 ---
+  // --- 交通尋路測試狀態 (車輛 / 行人) ---
+  private trafficSubMode: 'vehicle' | 'pedestrian' = 'vehicle';
   private isTestModeActive: boolean = false;
   private currentStep: 'selectStart' | 'selectEnd' | 'ready' = 'selectStart';
   private selectedStartLane: DirectedLane | null = null;
   private selectedEndLane: DirectedLane | null = null;
+  private selectedStartPedNode: PedestrianNode | null = null;
+  private selectedEndPedNode: PedestrianNode | null = null;
   private currentRoute: PathResult | null = null;
+  private currentPedRoute: PedestrianPathResult | null = null;
 
-  // 車輛測試 3D 視覺物件
+  // 交通測試 3D 視覺物件
   private testVisualGroup: THREE.Group;
   private hoverMarker: THREE.Mesh;
+  private hoverPedMarker: THREE.Mesh;
   private startBeacon: THREE.Group | null = null;
   private endBeacon: THREE.Group | null = null;
   private pathLineMesh: THREE.Line | null = null;
@@ -109,6 +117,19 @@ export class DevMenu {
     this.hoverMarker = new THREE.Mesh(hoverGeo, hoverMat);
     this.hoverMarker.visible = false;
     this.testVisualGroup.add(this.hoverMarker);
+
+    // 行人選點懸浮圓形標記
+    const hoverPedGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.04, 16);
+    const hoverPedMat = new THREE.MeshBasicMaterial({
+      color: 0x06b6d4,
+      transparent: true,
+      opacity: 0.75,
+      depthTest: true,
+    });
+    this.hoverPedMarker = new THREE.Mesh(hoverPedGeo, hoverPedMat);
+    this.hoverPedMarker.name = 'DevTestPedHoverMarker';
+    this.hoverPedMarker.visible = false;
+    this.testVisualGroup.add(this.hoverPedMarker);
 
     // 2. 3D 模型展台檢視群組
     this.showroomGroup = new THREE.Group();
@@ -443,7 +464,7 @@ export class DevMenu {
 
       <!-- 子功能切換分頁 -->
       <div class="dev-tabs-bar">
-        <button class="dev-tab-btn active" id="tab-traffic-btn">🚗 車輛</button>
+        <button class="dev-tab-btn active" id="tab-traffic-btn">🚦 交通</button>
         <button class="dev-tab-btn" id="tab-models-btn">🏛️ 模型</button>
         <button class="dev-tab-btn" id="tab-citizens-btn">👥 市民</button>
         <button class="dev-tab-btn" id="tab-housing-btn">🏡 需求</button>
@@ -451,15 +472,25 @@ export class DevMenu {
       </div>
 
       <div class="dev-panel-body">
-        <!-- 分頁 1：車輛道路測試 -->
+        <!-- 分頁 1：交通測試 (車輛與行人尋路) -->
         <div id="dev-section-traffic">
           <div class="dev-tool-card">
             <div class="dev-tool-title">
-              <span>車輛尋路與號誌遵守測試</span>
+              <span id="dev-traffic-title">🚗 車輛尋路與號誌遵守測試</span>
               <span id="dev-test-badge" style="font-size: 10px; color: #94a3b8;">待命中</span>
             </div>
-            <div class="dev-tool-desc">
+            <div class="dev-tool-desc" id="dev-traffic-desc">
               在車道上點選起點與終點，車輛將以 A* 最短路徑出發行駛，並嚴格遵守路口號誌。
+            </div>
+
+            <!-- 交通模式切換：車輛 vs 行人 -->
+            <div style="display: flex; gap: 6px; margin: 6px 0;">
+              <button class="dev-action-btn secondary active" id="dev-traffic-mode-car" style="flex: 1; font-size: 11px;">
+                🚗 車輛測試
+              </button>
+              <button class="dev-action-btn secondary" id="dev-traffic-mode-ped" style="flex: 1; font-size: 11px;">
+                🚶 行人測試
+              </button>
             </div>
 
             <button class="dev-action-btn" id="dev-toggle-test-btn">
@@ -486,14 +517,14 @@ export class DevMenu {
             </div>
 
             <div class="dev-btn-row">
-              <button class="dev-action-btn" id="dev-spawn-car-btn" disabled>
+              <button class="dev-action-btn" id="dev-spawn-traffic-btn" disabled>
                 🚀 發車實測
               </button>
               <button class="dev-action-btn secondary" id="dev-reset-btn">
                 🔄 重設起訖
               </button>
             </div>
-            <button class="dev-action-btn secondary" id="dev-clear-cars-btn" style="width: 100%;">
+            <button class="dev-action-btn secondary" id="dev-clear-traffic-btn" style="width: 100%;">
               🗑️ 清除所有測試車輛
             </button>
 
@@ -1185,16 +1216,54 @@ export class DevMenu {
       }
     });
 
-    // --- 車輛測試相關按鈕綁定 ---
+    // --- 交通測試相關按鈕綁定 (車輛 vs 行人模式) ---
+    const carModeBtn = this.panelContainer.querySelector('#dev-traffic-mode-car') as HTMLButtonElement;
+    const pedModeBtn = this.panelContainer.querySelector('#dev-traffic-mode-ped') as HTMLButtonElement;
+    const trafficTitle = this.panelContainer.querySelector('#dev-traffic-title') as HTMLElement;
+    const trafficDesc = this.panelContainer.querySelector('#dev-traffic-desc') as HTMLElement;
     const toggleTestBtn = this.panelContainer.querySelector('#dev-toggle-test-btn') as HTMLButtonElement;
+    const spawnTrafficBtn = this.panelContainer.querySelector('#dev-spawn-traffic-btn') as HTMLButtonElement;
+    const clearTrafficBtn = this.panelContainer.querySelector('#dev-clear-traffic-btn') as HTMLButtonElement;
+
+    carModeBtn.addEventListener('click', () => {
+      if (this.trafficSubMode === 'vehicle') return;
+      this.trafficSubMode = 'vehicle';
+      carModeBtn.classList.add('active');
+      pedModeBtn.classList.remove('active');
+      trafficTitle.textContent = '🚗 車輛尋路與號誌遵守測試';
+      trafficDesc.textContent = '在車道上點選起點與終點，車輛將以 A* 最短路徑出發行駛，並嚴格遵守路口號誌。';
+      toggleTestBtn.textContent = this.isTestModeActive ? '🛑 退出選點測試' : '🎯 開啟道路選點模式';
+      spawnTrafficBtn.textContent = '🚀 發車實測';
+      clearTrafficBtn.textContent = '🗑️ 清除所有測試車輛';
+      this.resetPoints();
+    });
+
+    pedModeBtn.addEventListener('click', () => {
+      if (this.trafficSubMode === 'pedestrian') return;
+      this.trafficSubMode = 'pedestrian';
+      pedModeBtn.classList.add('active');
+      carModeBtn.classList.remove('active');
+      trafficTitle.textContent = '🚶 行人尋路與號誌遵守測試';
+      trafficDesc.textContent = '在人行道上點選起點與終點，測試行人將沿著人行道與斑馬線步行，並依號誌燈停等穿越。到達終點後停留 3 秒消失。';
+      toggleTestBtn.textContent = this.isTestModeActive ? '🛑 退出選點測試' : '🎯 開啟人行道選點模式';
+      spawnTrafficBtn.textContent = '🚶 行人出發';
+      clearTrafficBtn.textContent = '🗑️ 清除所有測試行人';
+      this.resetPoints();
+    });
+
     toggleTestBtn.addEventListener('click', () => {
       this.setTestModeActive(!this.isTestModeActive);
     });
 
-    const spawnBtn = this.panelContainer.querySelector('#dev-spawn-car-btn') as HTMLButtonElement;
-    spawnBtn.addEventListener('click', () => {
-      if (this.currentRoute) {
-        this.vehicleManager.spawnTestVehicle(this.currentRoute);
+    spawnTrafficBtn.addEventListener('click', () => {
+      if (this.trafficSubMode === 'vehicle') {
+        if (this.currentRoute) {
+          this.vehicleManager.spawnTestVehicle(this.currentRoute);
+        }
+      } else {
+        if (this.currentPedRoute && this.pedestrianManager) {
+          this.pedestrianManager.spawnTestPedestrian(this.currentPedRoute);
+        }
       }
     });
 
@@ -1203,9 +1272,12 @@ export class DevMenu {
       this.resetPoints();
     });
 
-    const clearBtn = this.panelContainer.querySelector('#dev-clear-cars-btn') as HTMLButtonElement;
-    clearBtn.addEventListener('click', () => {
-      this.vehicleManager.clearAllVehicles();
+    clearTrafficBtn.addEventListener('click', () => {
+      if (this.trafficSubMode === 'vehicle') {
+        this.vehicleManager.clearAllVehicles();
+      } else {
+        this.pedestrianManager?.clearAllTestPedestrians();
+      }
     });
 
     // 模擬速度按鈕監聽
@@ -1531,9 +1603,6 @@ export class DevMenu {
 
   public setBuildingManager(bm: BuildingManager): void {
     this.buildingManager = bm;
-    this.buildingManager.setOnCommuteStateChangedCallback(() => {
-      this.updateHousingUI();
-    });
   }
 
   public updateHousingUI(): void {
@@ -1545,8 +1614,20 @@ export class DevMenu {
     const listElem = this.panelContainer.querySelector('#dev-housing-list');
 
     const buildings = this.buildingManager.getResidentialBuildings();
+    const currentPop = this.buildingManager.getTotalPopulation();
     if (countVal) countVal.textContent = `${buildings.length} 棟`;
-    if (popVal) popVal.textContent = `${this.buildingManager.getTotalPopulation()} 人`;
+    if (popVal) popVal.textContent = `${currentPop} 人`;
+
+    const badgeElem = this.panelContainer.querySelector('#dev-housing-badge') as HTMLElement | null;
+    if (badgeElem) {
+      if (currentPop >= 30) {
+        badgeElem.textContent = `已達 30 人 (已停止)`;
+        badgeElem.style.color = '#94a3b8';
+      } else {
+        badgeElem.textContent = `每5分自動入住中 (目標30)`;
+        badgeElem.style.color = '#38bdf8';
+      }
+    }
 
     const stats = this.buildingManager.getDemandStats();
     if (statsVal) {
@@ -1631,24 +1712,29 @@ export class DevMenu {
       } else {
         listElem.innerHTML = buildings
           .map((b) => {
+            const resProfile = b.residentialProfile;
+            const insideCount = resProfile?.insideResidentCount ?? 0;
+            const regCount = resProfile?.registeredResidents ?? 0;
             const st = b.status === 'constructing'
-              ? `<span style="color: #fbbf24;">建造中 (${Math.floor(b.constructionProgress * 100)}%) [${b.residentialProfile?.state ?? 'Constructing'}]</span>`
-              : `<span style="color: #4ade80;">入住 ${b.currentOccupants}/${b.registeredResidents}人 [${b.residentialProfile?.state ?? 'Active'}]</span>`;
+              ? `<span style="color: #fbbf24;">建造中 (${Math.floor(b.constructionProgress * 100)}%) [${resProfile?.state ?? 'Constructing'}]</span>`
+              : `<span style="color: #4ade80;">入住 ${insideCount}/${regCount}人 [${resProfile?.state ?? 'Active'}]</span>`;
 
             let vehInfo = '';
-            if (b.vehicles && b.vehicles.length > 0) {
-              const vehSummary = b.vehicles.map((v, i) => {
+            const vehs = resProfile?.vehicles ?? [];
+            if (vehs.length > 0) {
+              const vehSummary = vehs.map((v, i) => {
                 const vSt = v.status === 'available'
                   ? '<span style="color: #4ade80;">閒置可用</span>'
                   : (v.status === 'in_use' ? `<span style="color: #fbbf24;">出行中(${v.currentDriverName || '市民'})</span>` : '<span style="color: #38bdf8;">遷入中</span>');
                 return `#${i + 1}[${v.sourceLabel}·${v.colorName}]: ${vSt}`;
               }).join('； ');
-              vehInfo = `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">🚗 名下車輛 (${b.vehicles.length}輛): <span style="color: #cbd5e1;">${vehSummary}</span></div>`;
+              vehInfo = `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">🚗 名下車輛 (${vehs.length}輛): <span style="color: #cbd5e1;">${vehSummary}</span></div>`;
             }
 
             let resInfo = '';
-            if (b.residents && b.residents.length > 0) {
-              const resSummary = b.residents.map((r) => {
+            const buildingResidents = this.buildingManager?.getAllResidents(b.id) ?? [];
+            if (buildingResidents.length > 0) {
+              const resSummary = buildingResidents.map((r) => {
                 const icon = r.gender === 'male' ? '👨' : '👩';
                 let act = r.atHome ? '在家' : '遷入進屋中';
                 if (r.currentActivity === 'AtWork') {
@@ -1663,9 +1749,12 @@ export class DevMenu {
                 const workName = r.workBuildingId
                   ? (this.buildingManager?.getBuildingById(r.workBuildingId)?.metadata.name ?? r.workBuildingId)
                   : null;
+                const workInfo = workName
+                  ? `${workName}${r.earliestWorkTime ? ` (${r.earliestWorkTime})` : ''}`
+                  : null;
                 const hasFindJobTask = r.taskQueue?.some((t) => t.type === 'FIND_JOB') ?? false;
-                const jobText = workName
-                  ? `<span style="color: #4ade80;">💼${workName}</span>`
+                const jobText = workInfo
+                  ? `<span style="color: #4ade80;">💼${workInfo}</span>`
                   : (r.age < 18
                       ? '<span style="color: #64748b;">未成年</span>'
                       : (hasFindJobTask
@@ -1709,9 +1798,9 @@ export class DevMenu {
         indListElem.innerHTML = indBuildings
           .map((b) => {
             const ind = b.industrialProfile;
-            const employed = ind ? ind.workerCount : (b.employedWorkerIds ? b.employedWorkerIds.length : 0);
+            const employed = ind ? ind.workerCount : 0;
             const maxWorkers = ind ? ind.maxWorkers : b.metadata.capacity;
-            const insideWorkers = ind ? ind.insideWorkerCount : b.currentOccupants;
+            const insideWorkers = ind ? ind.insideWorkerCount : 0;
             const funds = ind ? ind.funds : 0;
             const rawInfo = ind ? `${ind.rawMaterialType}:${ind.rawMaterialAmount}` : '未指定:0';
             const prodInfo = ind ? `${ind.productType}:${ind.productAmount}` : '未指定:0';
@@ -1724,7 +1813,7 @@ export class DevMenu {
                   <span style="color: #38bdf8;">員工: ${employed}/${maxWorkers}人 | 廠內: ${insideWorkers}人</span>
                 </div>
                 <div style="font-size: 10px; color: #94a3b8; display: flex; justify-content: space-between; margin-top: 2px;">
-                  <span>💰 資金: $${funds.toLocaleString()} · 🚚 貨車: ${truckCount}台</span>
+                  <span>💰 資金: $${funds.toLocaleString()} · ⏰ 最早: ${ind?.earliestWorkTime ?? '06:00'} · 🚚 貨車: ${truckCount}台</span>
                   <span>📦 原料(${rawInfo}) · 🏭 產品(${prodInfo})</span>
                 </div>
                 <div style="font-size: 10px; color: #64748b; display: flex; justify-content: space-between; margin-top: 1px;">
@@ -1771,6 +1860,10 @@ export class DevMenu {
 
   public setParkingManager(pm: ParkingManager): void {
     this.parkingManager = pm;
+  }
+
+  public setPedestrianManager(pm: PedestrianManager): void {
+    this.pedestrianManager = pm;
   }
 
   public updateParkingUI(): void {
@@ -2138,7 +2231,7 @@ export class DevMenu {
   }
 
   // ==========================================
-  // 車輛道路測試實作邏輯 (Traffic Test)
+  // 交通道路與人行測試實作邏輯 (Traffic & Pedestrian Test)
   // ==========================================
 
   private setTestModeActive(active: boolean): void {
@@ -2159,10 +2252,11 @@ export class DevMenu {
       this.updateUIStatus();
     } else {
       toggleTestBtn.classList.remove('active');
-      toggleTestBtn.textContent = '🎯 開啟道路選點模式';
+      toggleTestBtn.textContent = this.trafficSubMode === 'vehicle' ? '🎯 開啟道路選點模式' : '🎯 開啟人行道選點模式';
       badge.textContent = '待命中';
       badge.style.color = '#94a3b8';
       this.hoverMarker.visible = false;
+      this.hoverPedMarker.visible = false;
       this.cameraManager.setLeftDragEnabled(true);
     }
   }
@@ -2175,20 +2269,35 @@ export class DevMenu {
     this.raycaster.setFromCamera(this.mousePos, this.camera);
 
     if (this.isTestModeActive) {
-      const hoveredLane = this.pickLaneUnderMouse();
+      if (this.trafficSubMode === 'vehicle') {
+        this.hoverPedMarker.visible = false;
+        const hoveredLane = this.pickLaneUnderMouse();
 
-      if (hoveredLane) {
-        this.hoverMarker.visible = true;
-        this.hoverMarker.position.copy(hoveredLane.centerPoint);
-        this.hoverMarker.position.y += 0.01;
+        if (hoveredLane) {
+          this.hoverMarker.visible = true;
+          this.hoverMarker.position.copy(hoveredLane.centerPoint);
+          this.hoverMarker.position.y += 0.01;
 
-        if (hoveredLane.direction === 'N' || hoveredLane.direction === 'S') {
-          this.hoverMarker.rotation.y = 0;
+          if (hoveredLane.direction === 'N' || hoveredLane.direction === 'S') {
+            this.hoverMarker.rotation.y = 0;
+          } else {
+            this.hoverMarker.rotation.y = Math.PI / 2;
+          }
         } else {
-          this.hoverMarker.rotation.y = Math.PI / 2;
+          this.hoverMarker.visible = false;
         }
       } else {
+        // 行人測試模式：懸浮吸附離滑鼠最近之人行道節點
         this.hoverMarker.visible = false;
+        const hoveredNode = this.pickPedestrianNodeUnderMouse();
+
+        if (hoveredNode) {
+          this.hoverPedMarker.visible = true;
+          this.hoverPedMarker.position.copy(hoveredNode.position);
+          this.hoverPedMarker.position.y += 0.02;
+        } else {
+          this.hoverPedMarker.visible = false;
+        }
       }
     } else if (this.isParkingModeActive && this.parkingManager) {
       this.handleParkingHover();
@@ -2201,25 +2310,49 @@ export class DevMenu {
     if (e.button !== 0) return;
 
     if (this.isTestModeActive) {
-      const clickedLane = this.pickLaneUnderMouse();
-      if (!clickedLane) return;
+      if (this.trafficSubMode === 'vehicle') {
+        const clickedLane = this.pickLaneUnderMouse();
+        if (!clickedLane) return;
 
-      if (this.currentStep === 'selectStart') {
-        this.selectedStartLane = clickedLane;
-        this.createBeacon('start', clickedLane.entryPoint);
-        this.currentStep = 'selectEnd';
-        this.updateUIStatus();
-      } else if (this.currentStep === 'selectEnd') {
-        this.selectedEndLane = clickedLane;
-        this.createBeacon('end', clickedLane.exitPoint);
-        this.currentStep = 'ready';
-        this.calculateRouteAndSpawn();
-      } else if (this.currentStep === 'ready') {
-        this.resetPoints();
-        this.selectedStartLane = clickedLane;
-        this.createBeacon('start', clickedLane.entryPoint);
-        this.currentStep = 'selectEnd';
-        this.updateUIStatus();
+        if (this.currentStep === 'selectStart') {
+          this.selectedStartLane = clickedLane;
+          this.createBeacon('start', clickedLane.entryPoint);
+          this.currentStep = 'selectEnd';
+          this.updateUIStatus();
+        } else if (this.currentStep === 'selectEnd') {
+          this.selectedEndLane = clickedLane;
+          this.createBeacon('end', clickedLane.exitPoint);
+          this.currentStep = 'ready';
+          this.calculateRouteAndSpawn();
+        } else if (this.currentStep === 'ready') {
+          this.resetPoints();
+          this.selectedStartLane = clickedLane;
+          this.createBeacon('start', clickedLane.entryPoint);
+          this.currentStep = 'selectEnd';
+          this.updateUIStatus();
+        }
+      } else {
+        // 行人測試模式選點
+        const clickedNode = this.pickPedestrianNodeUnderMouse();
+        if (!clickedNode) return;
+
+        if (this.currentStep === 'selectStart') {
+          this.selectedStartPedNode = clickedNode;
+          this.createBeacon('start', clickedNode.position);
+          this.currentStep = 'selectEnd';
+          this.updateUIStatus();
+        } else if (this.currentStep === 'selectEnd') {
+          this.selectedEndPedNode = clickedNode;
+          this.createBeacon('end', clickedNode.position);
+          this.currentStep = 'ready';
+          this.calculatePedestrianRouteAndSpawn();
+        } else if (this.currentStep === 'ready') {
+          this.resetPoints();
+          this.selectedStartPedNode = clickedNode;
+          this.createBeacon('start', clickedNode.position);
+          this.currentStep = 'selectEnd';
+          this.updateUIStatus();
+        }
       }
     } else if (this.isParkingModeActive && this.parkingManager) {
       this.handleParkingClick();
@@ -2258,6 +2391,38 @@ export class DevMenu {
     return null;
   }
 
+  private pickPedestrianNodeUnderMouse(): PedestrianNode | null {
+    const tiles: RoadTile[] = Array.from(this.roadNetwork.getAllTiles());
+    if (tiles.length === 0) return null;
+
+    const meshes = tiles.map((t) => t.mesh);
+    const intersects = this.raycaster.intersectObjects(meshes, false);
+
+    let hitPoint: THREE.Vector3 | null = null;
+    if (intersects.length > 0) {
+      hitPoint = intersects[0].point;
+    } else {
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      const target = new THREE.Vector3();
+      if (this.raycaster.ray.intersectPlane(plane, target)) {
+        hitPoint = target;
+      }
+    }
+
+    if (!hitPoint) return null;
+
+    const pedNet = this.roadNetwork.getPedestrianNetwork();
+    const closestNode = pedNet.findClosestNode(hitPoint, false);
+    if (closestNode) {
+      const distSq = closestNode.position.distanceToSquared(hitPoint);
+      if (distSq <= 2.5 * 2.5) {
+        return closestNode;
+      }
+    }
+
+    return null;
+  }
+
   private calculateRouteAndSpawn(): void {
     if (!this.selectedStartLane || !this.selectedEndLane) return;
 
@@ -2273,6 +2438,30 @@ export class DevMenu {
     if (route) {
       this.drawRoutePath(route.waypoints);
       this.vehicleManager.spawnTestVehicle(route);
+    } else {
+      this.clearRoutePath();
+    }
+
+    this.updateUIStatus();
+  }
+
+  private calculatePedestrianRouteAndSpawn(): void {
+    if (!this.selectedStartPedNode || !this.selectedEndPedNode) return;
+
+    const pedNet = this.roadNetwork.getPedestrianNetwork();
+    const route = pedNet.findShortestPath(
+      this.selectedStartPedNode.position,
+      this.selectedEndPedNode.position,
+      false
+    );
+
+    this.currentPedRoute = route;
+
+    if (route) {
+      this.drawRoutePath(route.waypoints);
+      if (this.pedestrianManager) {
+        this.pedestrianManager.spawnTestPedestrian(route);
+      }
     } else {
       this.clearRoutePath();
     }
@@ -2362,7 +2551,10 @@ export class DevMenu {
   private resetPoints(): void {
     this.selectedStartLane = null;
     this.selectedEndLane = null;
+    this.selectedStartPedNode = null;
+    this.selectedEndPedNode = null;
     this.currentRoute = null;
+    this.currentPedRoute = null;
     this.currentStep = 'selectStart';
 
     if (this.startBeacon) {
@@ -2382,47 +2574,91 @@ export class DevMenu {
     const startVal = this.panelContainer.querySelector('#dev-start-lane') as HTMLElement;
     const endVal = this.panelContainer.querySelector('#dev-end-lane') as HTMLElement;
     const routeVal = this.panelContainer.querySelector('#dev-route-status') as HTMLElement;
-    const spawnBtn = this.panelContainer.querySelector('#dev-spawn-car-btn') as HTMLButtonElement;
+    const spawnBtn = this.panelContainer.querySelector('#dev-spawn-traffic-btn') as HTMLButtonElement;
 
-    if (this.selectedStartLane) {
-      startVal.textContent = this.selectedStartLane.id;
-      startVal.style.color = '#4ade80';
+    if (this.trafficSubMode === 'vehicle') {
+      if (this.selectedStartLane) {
+        startVal.textContent = this.selectedStartLane.id;
+        startVal.style.color = '#4ade80';
+      } else {
+        startVal.textContent = '未設定';
+        startVal.style.color = '#94a3b8';
+      }
+
+      if (this.selectedEndLane) {
+        endVal.textContent = this.selectedEndLane.id;
+        endVal.style.color = '#f87171';
+      } else {
+        endVal.textContent = '未設定';
+        endVal.style.color = '#94a3b8';
+      }
+
+      if (this.currentRoute) {
+        routeVal.textContent = `規劃成功 (${this.currentRoute.totalDistance.toFixed(1)}m)`;
+        routeVal.style.color = '#38bdf8';
+        spawnBtn.disabled = false;
+      } else {
+        routeVal.textContent = this.selectedEndLane ? '無可行路徑' : '未規劃';
+        routeVal.style.color = '#94a3b8';
+        spawnBtn.disabled = true;
+      }
+
+      switch (this.currentStep) {
+        case 'selectStart':
+          stepHint.textContent = '👉 步驟 1: 在車道上點擊【起點】';
+          stepHint.style.color = '#4ade80';
+          break;
+        case 'selectEnd':
+          stepHint.textContent = '👉 步驟 2: 在車道上點擊【終點】';
+          stepHint.style.color = '#f87171';
+          break;
+        case 'ready':
+          stepHint.textContent = '✅ 已完成起訖規劃，車輛出發！';
+          stepHint.style.color = '#38bdf8';
+          break;
+      }
     } else {
-      startVal.textContent = '未設定';
-      startVal.style.color = '#94a3b8';
-    }
+      // 行人模式
+      if (this.selectedStartPedNode) {
+        startVal.textContent = `${this.selectedStartPedNode.id} (${this.selectedStartPedNode.type})`;
+        startVal.style.color = '#4ade80';
+      } else {
+        startVal.textContent = '未設定';
+        startVal.style.color = '#94a3b8';
+      }
 
-    if (this.selectedEndLane) {
-      endVal.textContent = this.selectedEndLane.id;
-      endVal.style.color = '#f87171';
-    } else {
-      endVal.textContent = '未設定';
-      endVal.style.color = '#94a3b8';
-    }
+      if (this.selectedEndPedNode) {
+        endVal.textContent = `${this.selectedEndPedNode.id} (${this.selectedEndPedNode.type})`;
+        endVal.style.color = '#f87171';
+      } else {
+        endVal.textContent = '未設定';
+        endVal.style.color = '#94a3b8';
+      }
 
-    if (this.currentRoute) {
-      routeVal.textContent = `規劃成功 (${this.currentRoute.totalDistance.toFixed(1)}m)`;
-      routeVal.style.color = '#38bdf8';
-      spawnBtn.disabled = false;
-    } else {
-      routeVal.textContent = this.selectedEndLane ? '無可行路徑' : '未規劃';
-      routeVal.style.color = '#94a3b8';
-      spawnBtn.disabled = true;
-    }
+      if (this.currentPedRoute) {
+        routeVal.textContent = `規劃成功 (${this.currentPedRoute.totalDistance.toFixed(1)}m · 斑馬線 ${this.currentPedRoute.crosswalkCount}處)`;
+        routeVal.style.color = '#38bdf8';
+        spawnBtn.disabled = false;
+      } else {
+        routeVal.textContent = this.selectedEndPedNode ? '無可行人行路徑' : '未規劃';
+        routeVal.style.color = '#94a3b8';
+        spawnBtn.disabled = true;
+      }
 
-    switch (this.currentStep) {
-      case 'selectStart':
-        stepHint.textContent = '👉 步驟 1: 在車道上點擊【起點】';
-        stepHint.style.color = '#4ade80';
-        break;
-      case 'selectEnd':
-        stepHint.textContent = '👉 步驟 2: 在車道上點擊【終點】';
-        stepHint.style.color = '#f87171';
-        break;
-      case 'ready':
-        stepHint.textContent = '✅ 已完成起訖規劃，車輛出發！';
-        stepHint.style.color = '#38bdf8';
-        break;
+      switch (this.currentStep) {
+        case 'selectStart':
+          stepHint.textContent = '👉 步驟 1: 在人行道上點擊【起點】';
+          stepHint.style.color = '#4ade80';
+          break;
+        case 'selectEnd':
+          stepHint.textContent = '👉 步驟 2: 在人行道上點擊【終點】';
+          stepHint.style.color = '#f87171';
+          break;
+        case 'ready':
+          stepHint.textContent = '✅ 已完成人行路徑規劃，行人出發！';
+          stepHint.style.color = '#38bdf8';
+          break;
+      }
     }
   }
 }

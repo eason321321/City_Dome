@@ -13,7 +13,6 @@ import { BuildingTooltip } from '../ui/BuildingTooltip';
 import { BuildingDensityLevel } from '../types/common';
 import {
   CitizenActivityState,
-  TransitPreference,
   TravelMode,
   CitizenVehicleRegistration,
   CitizenProfile,
@@ -27,19 +26,17 @@ import {
   DemandStatus,
   HousingDemand,
   MatchingResult,
-  TravelDecisionOptions,
-  TravelDecisionResult,
 } from '../types/building';
 import { IndustrialLowState, IndustrialLowProfile, IndustrialProfile } from '../types/industrial';
 import { ResidentialState, ResidentialProfile, ResidentialLowProfile } from '../types/residential';
 import { CitizenStateMachine } from '../simulation/CitizenStateMachine';
 import { IndustrialStateMachine } from '../simulation/IndustrialStateMachine';
 import { ResidentialStateMachine } from '../simulation/ResidentialStateMachine';
+import { TravelDecisionPlan } from '../simulation/TravelModeEvaluator';
 
 export type {
   BuildingDensityLevel,
   CitizenActivityState,
-  TransitPreference,
   TravelMode,
   CitizenVehicleRegistration,
   CitizenProfile,
@@ -57,8 +54,6 @@ export type {
   DemandStatus,
   HousingDemand,
   MatchingResult,
-  TravelDecisionOptions,
-  TravelDecisionResult,
   ActivePedestrian,
   MovingInPedestrian,
 };
@@ -103,13 +98,19 @@ export class BuildingManager {
   private totalDemandLost: number = 0;
   private latestMatchingResult: MatchingResult | null = null;
 
+  // 自動住房入住需求產生參數與計時器（依虛擬世界時間推進）
+  public static readonly AUTO_DEMAND_INTERVAL_VIRTUAL_MIN = 5;
+  public static readonly AUTO_DEMAND_TARGET_POPULATION = 30;
+  private lastAutoDemandVirtualMin: number = -1;
+
+  // 需求處理完成監聽器清單
+  private demandProcessedListeners: Set<(result: MatchingResult) => void> = new Set();
+
   // 懸停射線與浮動 Tooltip 元件
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
   private mousePos: THREE.Vector2 = new THREE.Vector2();
   private hoveredBuilding: PlacedBuilding | null = null;
   private tooltip: BuildingTooltip;
-
-  private onCommuteStateChanged?: () => void;
 
   constructor(
     scene: THREE.Scene,
@@ -157,14 +158,8 @@ export class BuildingManager {
 
   private wireCitizenManagerHooks(): void {
     this.citizenManager.setSyncHooks({
-      onBuildingStateChanged: (building) => {
-        if (building.metadata.category === 'Residential_Low') {
-          this.syncResidentialProfileCounts(building);
-        }
+      onBuildingStateChanged: () => {
         this.updateTooltipContent();
-      },
-      onCommuteStateChanged: () => {
-        if (this.onCommuteStateChanged) this.onCommuteStateChanged();
       },
     });
   }
@@ -215,8 +210,11 @@ export class BuildingManager {
       createdAt: Date.now(),
     };
 
-    // 最新需求置於最上方 (清單開頭)
+    // 最新需求置於最上方 (清單開頭，限制最多保留 50 筆避免無限膨脹)
     this.demandQueue.unshift(demand);
+    if (this.demandQueue.length > 50) {
+      this.demandQueue.length = 50;
+    }
 
     // 進行核心配對流程
     this.processDemand(demand);
@@ -243,6 +241,58 @@ export class BuildingManager {
     } else {
       this.matchBuildNew(demand);
     }
+
+    if (this.latestMatchingResult) {
+      this.notifyDemandProcessed(this.latestMatchingResult);
+    }
+  }
+
+  /**
+   * 註冊住房需求配對完成監聽器
+   */
+  public onDemandProcessed(listener: (result: MatchingResult) => void): () => void {
+    this.demandProcessedListeners.add(listener);
+    return () => this.demandProcessedListeners.delete(listener);
+  }
+
+  /**
+   * 通知所有監聽器最新配對結果
+   */
+  private notifyDemandProcessed(result: MatchingResult): void {
+    for (const listener of this.demandProcessedListeners) {
+      try {
+        listener(result);
+      } catch (err) {
+        console.error('Error in demandProcessedListener:', err);
+      }
+    }
+  }
+
+  /**
+   * 依虛擬時間推進自動住房入住需求生成
+   * 規則：
+   * 1. 登記人口 < 30 時持續產生新需求
+   * 2. 遊戲內虛擬時間每 5 分鐘產生一筆 1-5 人的隨機住房需求
+   * 3. 達到 30 人（或在途遷入完成後超過 30）則停止；若低於 30 人則自動恢復生成
+   */
+  public stepAutoHousingDemand(currentVirtualMin: number): HousingDemand | null {
+    // 檢查已登記人口是否已達標（30人）
+    if (this.getTotalPopulation() >= BuildingManager.AUTO_DEMAND_TARGET_POPULATION) {
+      return null;
+    }
+
+    // 虛擬時間推進檢驗
+    if (this.lastAutoDemandVirtualMin < 0 || currentVirtualMin < this.lastAutoDemandVirtualMin) {
+      this.lastAutoDemandVirtualMin = currentVirtualMin;
+      return null;
+    }
+
+    if (currentVirtualMin - this.lastAutoDemandVirtualMin >= BuildingManager.AUTO_DEMAND_INTERVAL_VIRTUAL_MIN) {
+      this.lastAutoDemandVirtualMin = currentVirtualMin;
+      return this.generateRandomDemand();
+    }
+
+    return null;
   }
 
   /**
@@ -255,13 +305,11 @@ export class BuildingManager {
       // 建造中的房屋無法作為候選房屋
       if (b.status !== 'completed') return false;
       // 需求密度符合 (Low 對應 Residential_Low)
-      if (b.metadata.category !== 'Residential_Low') return false;
+      if (b.metadata.category !== 'Residential_Low' || !b.residentialProfile) return false;
       // 房型在偏好內
       if (!demand.preferredModels.includes(b.modelId)) return false;
-      // 剩餘容量 >= 人數
-      const remainingCapacity = b.metadata.capacity - b.registeredResidents;
-      if (remainingCapacity < demand.peopleCount) return false;
-      return true;
+      // 剩餘容量 >= 人數（直接查閱 ResidentialProfile）
+      return ResidentialStateMachine.hasRemainingCapacity(b.residentialProfile, demand.peopleCount);
     });
 
     if (candidates.length === 0) {
@@ -309,9 +357,9 @@ export class BuildingManager {
     demand.matchedBuildingName = chosenBuilding.metadata.name;
     demand.matchedType = 'joinExisting';
 
-    chosenBuilding.registeredResidents += demand.peopleCount;
-    chosenBuilding.isCoLiving = true;
-    this.syncResidentialProfileCounts(chosenBuilding);
+    if (chosenBuilding.residentialProfile) {
+      ResidentialStateMachine.addDemandResidents(chosenBuilding.residentialProfile, demand.peopleCount, true);
+    }
 
     this.totalMatchedSuccess += demand.peopleCount;
     this.latestMatchingResult = {
@@ -772,12 +820,6 @@ export class BuildingManager {
       status: 'constructing',
       constructionProgress: 0.0,
       constructionDuration: 18.0, // 建造時間為原先 6.0s 的 3 倍 = 18.0s (以遊戲模擬時間推進)
-      registeredResidents: peopleCount,
-      currentOccupants: 0,
-      isCoLiving,
-      residents: [],
-      vehicles: [],
-      employedWorkerIds: [],
       craneRefs: constructionSite.craneRefs,
     };
 
@@ -1320,7 +1362,8 @@ export class BuildingManager {
     }
 
     // 觸發市民開車自邊界公路進入城市，遷入已登記之首批居民 (來源：建屋遷入)
-    this.dispatchCitizenVehicle(building, building.registeredResidents, 'construction');
+    const registeredCount = building.residentialProfile?.registeredResidents ?? 0;
+    this.dispatchCitizenVehicle(building, registeredCount, 'construction');
   }
 
   /**
@@ -1461,8 +1504,9 @@ export class BuildingManager {
     const carColors = [0x1d4ed8, 0x0f172a, 0x94a3b8, 0x047857, 0xb91c1c];
     const chosenColor = carColors[Math.floor(Math.random() * carColors.length)];
 
-    // 建立住宅名下車輛登記記錄 (一間住宅可有一輛或多輛車，建屋遷入一輛，併入遷入一輛)
-    const vehicleId = `veh_${building.id}_${building.vehicles.length + 1}`;
+    // 建立住宅名下車輛登記記錄（統一由 ResidentialProfile 持有，一間住宅可有一輛或多輛車）
+    const resProfile = building.residentialProfile;
+    const vehicleId = `veh_${building.id}_${(resProfile?.vehicles.length ?? 0) + 1}`;
     const resVehicle: ResidenceVehicle = {
       id: vehicleId,
       buildingId: building.id,
@@ -1473,14 +1517,15 @@ export class BuildingManager {
       status: 'en_route_move_in',
       registeredAt: Date.now(),
     };
-    building.vehicles.push(resVehicle);
-    this.syncResidentialProfileCounts(building);
+    if (resProfile) {
+      ResidentialStateMachine.registerVehicle(resProfile, resVehicle);
+    }
 
     this.vehicleManager.spawnMovingInVehicle(
       bestPath,
       chosenColor,
       (arrivedVehicle) => {
-        // 1. 車輛成功停車：將其登記為路邊停放車輛 (保留 Mesh，永駐路側)
+        // 1. 車輛成功停車：將其登記為路邊停放車輛 (保留 Mesh 於 ParkingManager，Profile 僅存純資料 ID/座標)
         if (parkingSpot && this.parkingManager) {
           const parkedCar = this.parkingManager.parkExistingCarMesh(
             arrivedVehicle.mesh,
@@ -1491,17 +1536,17 @@ export class BuildingManager {
           );
           resVehicle.parkedCarId = parkedCar.id;
           resVehicle.parkedSpot = parkingSpot;
-          resVehicle.mesh = arrivedVehicle.mesh;
-          resVehicle.status = 'available';
-        } else {
-          resVehicle.status = 'available';
-          resVehicle.mesh = arrivedVehicle.mesh;
+        }
+        resVehicle.status = 'available';
+        if (resProfile) {
+          ResidentialStateMachine.refreshVehicleCounts(resProfile);
         }
 
-        // 2. 車子停車成功後生成車內所有市民靜態基本資料（透過 CitizenManager 註冊全城清單，AT_home 嚴格保持 false）
+        // 2. 車子停車成功後生成車內所有市民（完整個資由 CitizenManager 管理，ResidentialProfile 僅存 citizenId 清單）
         const newResidents = this.citizenManager.generateCitizenProfiles(building.id, arrivingCount);
-        building.residents.push(...newResidents);
-        this.syncResidentialProfileCounts(building);
+        if (resProfile) {
+          ResidentialStateMachine.addResidentIds(resProfile, newResidents.map((r) => r.id));
+        }
 
         // 3. 計算市民下車走入房內之人行動線
         const carParkPos = parkingSpot ? parkingSpot.position.clone() : building.frontWorldPos.clone();
@@ -1538,12 +1583,8 @@ export class BuildingManager {
             walkTimer: Math.random() * 5.0,
             isAlighted: false,
             onArrivedDestination: () => {
-              if (CitizenStateMachine.transitionTo(res, 'AtHome')) {
-                building.currentOccupants += 1;
-                if (building.residentialProfile && building.residentialProfile.state !== 'Active') {
-                  ResidentialStateMachine.transitionTo(building.residentialProfile, 'Active');
-                }
-                this.syncResidentialProfileCounts(building);
+              if (CitizenStateMachine.transitionTo(res, 'AtHome') && resProfile) {
+                ResidentialStateMachine.recordResidentEntered(resProfile, res.id);
               }
               this.updateTooltipContent();
             },
@@ -1594,7 +1635,14 @@ export class BuildingManager {
 
       if (foundId && this.buildings.has(foundId)) {
         this.hoveredBuilding = this.buildings.get(foundId)!;
-        this.tooltip.showAt(clientX, clientY, this.hoveredBuilding, this.pedestrianManager, this.buildings);
+        this.tooltip.showAt(
+          clientX,
+          clientY,
+          this.hoveredBuilding,
+          this.pedestrianManager,
+          this.buildings,
+          this.citizenManager
+        );
         return;
       }
     }
@@ -1605,7 +1653,12 @@ export class BuildingManager {
 
   private updateTooltipContent(): void {
     if (!this.hoveredBuilding) return;
-    this.tooltip.updateContent(this.hoveredBuilding, this.pedestrianManager, this.buildings);
+    this.tooltip.updateContent(
+      this.hoveredBuilding,
+      this.pedestrianManager,
+      this.buildings,
+      this.citizenManager
+    );
   }
 
   // ==========================================
@@ -1616,31 +1669,27 @@ export class BuildingManager {
    * 取得指定住宅名下所有登記車輛清單
    */
   public getBuildingVehicles(buildingId: string): ResidenceVehicle[] {
-    const b = this.buildings.get(buildingId);
-    return b ? [...b.vehicles] : [];
+    const res = this.buildings.get(buildingId)?.residentialProfile;
+    return res ? [...res.vehicles] : [];
   }
 
   /**
    * 取得指定住宅名下目前閒置可用之車輛清單
    */
   public getAvailableVehicles(buildingId: string): ResidenceVehicle[] {
-    const b = this.buildings.get(buildingId);
-    if (!b) return [];
-    return b.vehicles.filter((v) => v.status === 'available');
+    const res = this.buildings.get(buildingId)?.residentialProfile;
+    return res ? ResidentialStateMachine.getAvailableVehicles(res) : [];
   }
 
   /**
-   * 住宅內市民出行方式決策 (委派 CitizenManager)
+   * 市民移動時選定交通方式之純決策評估 (委派 CitizenManager / TravelModeEvaluator，100% 無副作用)
    */
-  public decideCitizenTravel(citizenId: string, options?: TravelDecisionOptions): TravelDecisionResult {
-    return this.citizenManager.decideCitizenTravel(citizenId, this.buildings, options);
-  }
-
-  /**
-   * 市民出行返家 (委派 CitizenManager)
-   */
-  public returnCitizenToResidence(citizenId: string): { success: boolean; reason: string } {
-    return this.citizenManager.returnCitizenToResidence(citizenId, this.buildings);
+  public evaluateCitizenTravel(
+    citizenId: string,
+    originBuildingId: string,
+    destBuildingId: string
+  ): TravelDecisionPlan | null {
+    return this.citizenManager.evaluateCitizenTravel(citizenId, originBuildingId, destBuildingId, this.buildings);
   }
 
   /**
@@ -1713,9 +1762,10 @@ export class BuildingManager {
   public getTotalPopulation(): number {
     let total = 0;
     for (const b of this.buildings.values()) {
-      if (b.metadata.category === 'Residential_Low') {
+      const res = b.residentialProfile;
+      if (res) {
         // 總居住人口以登記居住市民數為準
-        total += b.residents.length > 0 ? b.residents.length : b.currentOccupants;
+        total += res.residentIds.length > 0 ? res.residentIds.length : res.insideResidentCount;
       }
     }
     return total;
@@ -1787,9 +1837,6 @@ export class BuildingManager {
       const site = this.findSiteForModel(meta);
       if (site) {
         const building = this.spawnBuilding(meta, site, meta.capacity);
-        building.registeredResidents = 0;
-        building.currentOccupants = 0;
-        building.employedWorkerIds = [];
         // 建造完成並隱藏鷹架，透過共用工業區狀態機切換為 Idle
         building.status = 'completed';
         building.constructionProgress = 1.0;
@@ -1843,22 +1890,6 @@ export class BuildingManager {
   }
 
   /**
-   * 同步住宅建築之狀態清單數據（登記人數、屋內人數、車輛數、閒置車輛數與合居旗標）
-   */
-  private syncResidentialProfileCounts(building: PlacedBuilding): void {
-    if (!building.residentialProfile) return;
-    const availableVehicles = building.vehicles.filter((v) => v.status === 'available').length;
-    ResidentialStateMachine.syncCounts(
-      building.residentialProfile,
-      building.registeredResidents,
-      building.currentOccupants,
-      building.vehicles.length,
-      availableVehicles,
-      building.isCoLiving
-    );
-  }
-
-  /**
    * 取得全市所有已建之工業建築清單
    */
   public getIndustrialBuildings(): PlacedBuilding[] {
@@ -1872,7 +1903,7 @@ export class BuildingManager {
   }
 
   /**
-   * 取得全市工業建築總職缺容量、當前入職人數與當前內部工人人數
+   * 取得全市工業建築總職缺容量、當前入職人數與當前內部工人人數（統一自 IndustrialProfile 統計）
    */
   public getTotalIndustrialCapacity(): {
     currentWorkers: number;
@@ -1885,9 +1916,10 @@ export class BuildingManager {
     let currentWorkers = 0;
     let totalEmployed = 0;
     for (const b of list) {
-      totalCapacity += b.metadata.capacity;
-      currentWorkers += b.currentOccupants;
-      totalEmployed += b.employedWorkerIds ? b.employedWorkerIds.length : 0;
+      const ind = b.industrialProfile;
+      totalCapacity += ind ? ind.maxWorkers : b.metadata.capacity;
+      currentWorkers += ind ? ind.insideWorkerCount : 0;
+      totalEmployed += ind ? ind.workerCount : 0;
     }
     return {
       currentWorkers,
@@ -1929,10 +1961,6 @@ export class BuildingManager {
     return TrafficDispatchHelper.attachCurbsideArrival(drivePath, parkSpot);
   }
 
-  public setOnCommuteStateChangedCallback(cb: () => void): void {
-    this.onCommuteStateChanged = cb;
-  }
-
   /**
    * 固定虛擬時間推進全體市民狀態機與任務列隊檢查（每 10 虛擬分鐘一次，全城每 10 次同步找工作）
    */
@@ -1952,13 +1980,6 @@ export class BuildingManager {
    */
   public getBuildingById(buildingId: string): PlacedBuilding | undefined {
     return this.buildings.get(buildingId);
-  }
-
-  /**
-   * 召回所有外出上班與通勤中的市民平安返家 (委派 CitizenManager)
-   */
-  public recallAllCitizensToResidence(): number {
-    return this.citizenManager.recallAllCitizensToResidence(this.buildings);
   }
 
   /**

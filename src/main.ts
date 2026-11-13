@@ -14,8 +14,11 @@ import { PedestrianManager } from './simulation/PedestrianManager';
 import { CitizenManager } from './simulation/CitizenManager';
 import { DevMenu } from './ui/DevMenu';
 import { BuildingManager } from './systems/BuildingManager';
+import { CityAdvisor } from './ui/CityAdvisor';
 import { BackgroundTimer } from './simulation/BackgroundTimer';
 import { Pathfinding } from './systems/Pathfinding';
+import { SoundtrackManager } from './systems/SoundtrackManager';
+import { SoundtrackPlayer } from './ui/SoundtrackPlayer';
 
 console.log('🏗️ City Dome 城市建造模擬器初始化中...');
 
@@ -151,6 +154,7 @@ if (container) {
     vehicleManager
   );
   devMenu.setParkingManager(parkingManager);
+  devMenu.setPedestrianManager(pedestrianManager);
 
   // 10. 建築生成與生命週期管理器 (串接獨立之 PedestrianManager 與 CitizenManager)
   const buildingManager = new BuildingManager(
@@ -167,14 +171,21 @@ if (container) {
   devMenu.setBuildingManager(buildingManager);
   devMenu.setTimeManager(timeManager);
 
-  // 11. 視窗自適應
+  // 11. 市政顧問通知系統 (右上角小鳥圖示與市政建議對話框)
+  const cityAdvisor = new CityAdvisor(buildingManager, timeManager);
+
+  // 12. 背景音樂與唱片播放系統 (頂部中央半透明旋轉唱片與播放控制)
+  const soundtrackManager = new SoundtrackManager();
+  const soundtrackPlayer = new SoundtrackPlayer(soundtrackManager);
+
+  // 13. 視窗自適應
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  // 12. 主渲染與模擬循環（支援前景 60+ FPS 與背景分頁 30 FPS 持續模擬）
+  // 13. 主渲染與模擬循環（支援前景 60+ FPS 與背景分頁 30 FPS 持續模擬）
   const clock = new THREE.Clock();
 
   /**
@@ -202,9 +213,11 @@ if (container) {
     // 更新建築系統（房屋建造進度、吊臂作業、完工派車）
     buildingManager.update(simDelta, isPaused);
 
-    // 依累計虛擬分鐘推進全體市民週期狀態檢查與任務列隊（每 10 虛擬分鐘檢查，每 10 次同步找工作）
+    // 依累計虛擬分鐘推進市民週期狀態檢查、找工作與自動住房需求生成 (人口 < 30 時每 5 虛擬分鐘生成)
     if (!isPaused) {
-      buildingManager.stepCitizenPeriodicSimulation(timeManager.getTotalVirtualMinutes());
+      const currentVirtualMin = timeManager.getTotalVirtualMinutes();
+      buildingManager.stepCitizenPeriodicSimulation(currentVirtualMin);
+      buildingManager.stepAutoHousingDemand(currentVirtualMin);
     }
 
     // 動態更新底部狀態欄人口
@@ -293,6 +306,9 @@ if (container) {
     parkingManager,
     devMenu,
     buildMenu,
+    cityAdvisor,
+    soundtrackManager,
+    soundtrackPlayer,
     Pathfinding,
     pedestrianNetwork: roadManager.getRoadNetwork().getPedestrianNetwork(),
   };

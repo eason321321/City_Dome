@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { BuildingMetadata } from '../rendering/BuildingModelFactory';
 import type { CurbsideSpot } from '../simulation/ParkingManager';
 import type { BuildingDensityLevel } from './common';
-import type { CitizenProfile } from './citizen';
 import type { IndustrialLowProfile } from './industrial';
 import type { ResidentialLowProfile } from './residential';
 
@@ -21,10 +20,12 @@ export interface ResidenceVehicle {
   parkedSpot?: CurbsideSpot;          // 停放的路側位置
   currentDriverCitizenId?: string;    // 當前借出駕駛的市民 ID
   currentDriverName?: string;         // 當前借出駕駛的市民姓名
-  mesh?: THREE.Group;                 // 3D 模型實體參照
-  registeredAt: number;               // 登記時間戳記
+  registeredAt: number;               // 登記時間戳記 (純資料欄位，不含 Three.js 實體參考)
 }
 
+/**
+ * 地圖上之建築實體外殼（專責 3D 模型、座標、土地與聯外道路關係；業務狀態統一收斂至對應 Profile）
+ */
 export interface PlacedBuilding {
   id: string;
   metadata: BuildingMetadata;
@@ -46,14 +47,8 @@ export interface PlacedBuilding {
   status: 'constructing' | 'completed';
   constructionProgress: number;     // 0.0 ~ 1.0
   constructionDuration: number;     // 建造總秒數 (以遊戲模擬時間計)
-  registeredResidents: number;      // 登記居住人數
-  currentOccupants: number;         // 當前房內/廠內人數
-  employedWorkerIds?: string[];     // 工廠入職市民 ID 清單 (入職人數 = employedWorkerIds.length)
-  industrialProfile?: IndustrialLowProfile;   // 工業區狀態清單項目 (僅工業區建築擁有)
-  residentialProfile?: ResidentialLowProfile; // 住宅區狀態清單項目 (僅住宅區建築擁有)
-  isCoLiving: boolean;              // 是否合居 (true: 與人合居, false: 自己住)
-  residents: CitizenProfile[];      // 入住市民詳細個資清單
-  vehicles: ResidenceVehicle[];     // 登記於此住宅之名下車輛清單 (建屋遷入與併入遷入)
+  industrialProfile?: IndustrialLowProfile;   // 工業區狀態清單項目（單一事實來源）
+  residentialProfile?: ResidentialLowProfile; // 住宅區狀態清單項目（單一事實來源）
   craneRefs?: {
     slewArm: THREE.Group;
     trolley: THREE.Group;
@@ -93,25 +88,4 @@ export interface MatchingResult {
   demand?: HousingDemand;
 }
 
-export interface TravelDecisionOptions {
-  destination?: THREE.Vector3;
-  distanceMeters?: number;           // 預計出行距離 (米)
-  purpose?: string;                  // 出行目的 (如 '上班', '休閒購物')
-  forceMode?: 'drive' | 'walk' | 'transit';
-}
 
-export interface TravelDecisionResult {
-  success: boolean;
-  citizenId: string;
-  citizenName: string;
-  citizenAge: number;
-  buildingId: string;
-  buildingName: string;
-  selectedMode: 'drive' | 'walk' | 'transit';
-  selectedVehicle?: ResidenceVehicle;
-  canDrive: boolean;
-  availableVehiclesCount: number;
-  totalVehiclesCount: number;
-  reason: string;
-  timestamp: number;
-}
